@@ -1,0 +1,17 @@
+name: Setup Dart Environment and Get Dependencies
+
+inputs:
+  working-directory:
+    description: 'The working directory of the package'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Dart SDK
+      uses: dart-lang/setup-dart@v1
+
+    - name: Get dependencies
+      shell: bash
+      run: dart pub get
+      working-directory: ${{ inputs.working-directory }}

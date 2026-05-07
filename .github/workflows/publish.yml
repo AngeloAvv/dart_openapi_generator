@@ -1,0 +1,52 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - '**'
+
+
+jobs:
+  dart_openapi_generator_annotations:
+    permissions:
+      id-token: write
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      working-directory: packages/dart_openapi_generator_annotations
+      environment: pub.dev
+
+  wait_for_annotations:
+    needs: dart_openapi_generator_annotations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for dart_openapi_generator_annotations to be indexed on pub.dev
+        run: |
+          VERSION=$(grep '^version:' packages/dart_openapi_generator_annotations/pubspec.yaml | awk '{print $2}')
+          echo "Waiting for dart_openapi_generator_annotations $VERSION to be available on pub.dev..."
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+          until [ "$ATTEMPT" -ge "$MAX_ATTEMPTS" ]; do
+            STATUS=$(curl -s --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "https://pub.dev/api/packages/dart_openapi_generator_annotations/versions/$VERSION" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "dart_openapi_generator_annotations $VERSION is available on pub.dev."
+              exit 0
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: pub.dev returned $STATUS. Retrying in 30 seconds..."
+            sleep 30
+          done
+          echo "::error::dart_openapi_generator_annotations $VERSION was not available on pub.dev after $((MAX_ATTEMPTS * 30)) seconds."
+          exit 1
+
+  dart_openapi_generator:
+    needs:
+      - wait_for_annotations
+    permissions:
+      id-token: write
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
+    with:
+      working-directory: packages/dart_openapi_generator
+      environment: pub.dev

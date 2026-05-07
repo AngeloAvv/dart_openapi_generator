@@ -1,0 +1,114 @@
+# Source: OpenAPI 3.2 draft features (hand-crafted)
+# Requirements exercised: PARSE-08, PARSE-11
+# Feature: in:querystring parameter location; additionalOperations (non-standard verb); 3.2 version string
+openapi: "3.2.0"
+info:
+  title: "OpenAPI 3.2 Features Fixture"
+  version: "1.0.0"
+servers:
+  - url: "https://api.example.com/v1"
+paths:
+  /search:
+    get:
+      operationId: searchItems
+      summary: "Search items"
+      parameters:
+        - name: q
+          in: querystring
+          required: false
+          description: "Raw query string for full-text search"
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: "Search results"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: string
+                  total:
+                    type: integer
+        "400":
+          description: "Bad request"
+    # Non-standard verb for OpenAPI 3.2 additionalOperations (PARSE-08)
+    query:
+      operationId: queryItems
+      summary: "Query items with body"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filter:
+                  type: string
+      responses:
+        "200":
+          description: "Query results"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: string
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+              required:
+                - name
+      responses:
+        "201":
+          description: "Created"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+        "422":
+          description: "Validation error"
+components:
+  schemas:
+    SearchResult:
+      type: object
+      description: "A single search result"
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        score:
+          type: number
+          format: float
+      required:
+        - id
+        - title

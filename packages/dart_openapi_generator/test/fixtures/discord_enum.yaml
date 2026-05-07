@@ -1,0 +1,45 @@
+# Source: Discord public OpenAPI spec (structure derived, values anonymized)
+# Requirements exercised: PARSE-05, NAME-02, PARSE-11
+# Feature: enum with SCREAMING_SNAKE_CASE values; PascalCase Dart class generation
+openapi: "3.0.3"
+info:
+  title: "Discord Enum Fixture"
+  version: "1.0.0"
+paths: {}
+components:
+  schemas:
+    MessageType:
+      type: string
+      description: "The type of message"
+      enum:
+        - DEFAULT
+        - RECIPIENT_ADD
+        - RECIPIENT_REMOVE
+        - CALL
+        - CHANNEL_NAME_CHANGE
+        - CHANNEL_ICON_CHANGE
+    ChannelType:
+      type: integer
+      description: "The type of channel"
+      enum:
+        - 0
+        - 1
+        - 2
+        - 4
+        - 5
+    Message:
+      type: object
+      description: "A Discord message"
+      properties:
+        id:
+          type: string
+        type:
+          $ref: '#/components/schemas/MessageType'
+        channel_id:
+          type: string
+        content:
+          type: string
+      required:
+        - id
+        - type
+        - channel_id

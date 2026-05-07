@@ -1,0 +1,41 @@
+# Source: GitHub public OpenAPI spec (structure derived, values anonymized)
+# Requirements exercised: PARSE-07, PARSE-11
+# Feature: oneOf with discriminator; $ref variants; every variant has discriminator property
+openapi: "3.1.0"
+info:
+  title: "GitHub Discriminator Fixture"
+  version: "1.0.0"
+paths: {}
+components:
+  schemas:
+    Webhook:
+      oneOf:
+        - $ref: '#/components/schemas/PushEvent'
+        - $ref: '#/components/schemas/PullRequestEvent'
+      discriminator:
+        propertyName: action
+    PushEvent:
+      type: object
+      description: "A push event"
+      properties:
+        action:
+          type: string
+        ref:
+          type: string
+        commits:
+          type: array
+          items:
+            type: string
+    PullRequestEvent:
+      type: object
+      description: "A pull request event"
+      properties:
+        action:
+          type: string
+        number:
+          type: integer
+        pull_request:
+          type: object
+          properties:
+            title:
+              type: string

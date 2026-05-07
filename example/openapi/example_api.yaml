@@ -1,0 +1,500 @@
+openapi: "3.2.0"
+info:
+  title: "Example API"
+  version: "1.0.0"
+servers:
+  - url: "https://api.example.com/v1"
+paths:
+  /auth/token:
+    post:
+      operationId: createToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+          description: Token response
+      security:
+        - basicAuth: []
+      summary: Obtain a bearer token
+      tags:
+        - Auth
+  /categories:
+    get:
+      operationId: listCategories
+      parameters:
+        - in: querystring
+          name: filter
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/Category'
+                type: array
+          description: A list of categories
+      security:
+        - bearerAuth: []
+      summary: List all categories
+      tags:
+        - Categories
+    post:
+      operationId: createCategory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Category'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: Created category
+      security:
+        - apiKeyHeader: []
+      summary: Create a category
+      tags:
+        - Categories
+  /categories/{id}:
+    get:
+      operationId: getCategory
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: A category
+        "404":
+          description: Not found
+      security:
+        - bearerAuth: []
+      summary: Get a category by ID
+      tags:
+        - Categories
+  /debug:
+    trace:
+      operationId: traceDebug
+      responses:
+        "200":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Echo
+      summary: Trace echo for debugging
+      tags:
+        - Debug
+  /users:
+    get:
+      operationId: listUsers
+      parameters:
+        - in: query
+          name: page
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/User'
+                type: array
+          description: A list of users
+      security:
+        - bearerAuth: []
+      summary: List all users
+      tags:
+        - Users
+    options:
+      operationId: optionsUsers
+      responses:
+        "200":
+          description: CORS preflight response
+      summary: CORS probe for /users
+      tags:
+        - Users
+    post:
+      operationId: createUser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: Created user
+      security:
+        - bearerAuth: []
+      summary: Create a user
+      tags:
+        - Users
+    query:
+      operationId: searchUsers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserSearchRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/User'
+                type: array
+          description: Matching users
+      summary: Search users (3.2 additionalOperations)
+      tags:
+        - Users
+  /users/{id}:
+    delete:
+      operationId: deleteUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+      security:
+        - bearerAuth: []
+      summary: Delete a user
+      tags:
+        - Users
+    get:
+      operationId: getUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: A user
+        "404":
+          description: Not found
+      security:
+        - bearerAuth: []
+      summary: Get a user by ID
+      tags:
+        - Users
+    head:
+      operationId: checkUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User exists
+        "404":
+          description: Not found
+      security:
+        - apiKeyQuery: []
+      summary: Check if user exists
+      tags:
+        - Users
+    patch:
+      operationId: patchUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Request-ID
+          required: false
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: Patched user
+      security:
+        - bearerAuth: []
+      summary: Partially update a user
+      tags:
+        - Users
+    put:
+      operationId: updateUser
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: Updated user
+      security:
+        - bearerAuth: []
+      summary: Replace a user
+      tags:
+        - Users
+  /users/{id}/profile:
+    get:
+      operationId: getUserProfile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: A user profile
+      security:
+        - bearerAuth: []
+      summary: Get a user profile (allOf example)
+      tags:
+        - Users
+  /users/{id}/notifications:
+    get:
+      operationId: getUserNotifications
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/Notification'
+                type: array
+          description: A list of notifications
+      security:
+        - bearerAuth: []
+      summary: Get notifications for a user (oneOf example)
+      tags:
+        - Users
+  /users/{id}/metadata:
+    get:
+      operationId: getUserMetadata
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+          description: User metadata
+      security:
+        - bearerAuth: []
+      summary: Get user metadata (additionalProperties example)
+      tags:
+        - Users
+components:
+  schemas:
+    Category:
+      properties:
+        children:
+          items:
+            $ref: '#/components/schemas/Category'
+          type: array
+        id:
+          type: string
+        name:
+          type: string
+        parentId:
+          nullable: true
+          type: string
+      required:
+        - id
+        - name
+      type: object
+    EmailNotification:
+      properties:
+        email:
+          type: string
+        type:
+          type: string
+      required:
+        - email
+        - type
+      type: object
+    Metadata:
+      additionalProperties:
+        type: string
+      properties:
+        createdBy:
+          type: string
+        version:
+          type: integer
+      type: object
+    Notification:
+      discriminator:
+        mapping:
+          email: '#/components/schemas/EmailNotification'
+          push: '#/components/schemas/PushNotification'
+        propertyName: type
+      oneOf:
+        - $ref: '#/components/schemas/EmailNotification'
+        - $ref: '#/components/schemas/PushNotification'
+    PushNotification:
+      properties:
+        deviceToken:
+          type: string
+        type:
+          type: string
+      required:
+        - deviceToken
+        - type
+      type: object
+    TokenRequest:
+      properties:
+        password:
+          type: string
+        username:
+          type: string
+      required:
+        - password
+        - username
+      type: object
+    TokenResponse:
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+        tokenType:
+          type: string
+      required:
+        - accessToken
+        - tokenType
+      type: object
+    User:
+      properties:
+        class:
+          nullable: true
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        default:
+          nullable: true
+          type: string
+        email:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+      required:
+        - email
+        - id
+        - name
+      type: object
+    UserProfile:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - properties:
+            bio:
+              nullable: true
+              type: string
+            website:
+              nullable: true
+              type: string
+          type: object
+    UserRole:
+      enum:
+        - admin
+        - member
+        - viewer
+      type: string
+    UserSearchRequest:
+      properties:
+        nameContains:
+          type: string
+        page:
+          type: integer
+      type: object
+  securitySchemes:
+    apiKeyHeader:
+      in: header
+      name: X-Api-Key
+      type: apiKey
+    apiKeyQuery:
+      in: query
+      name: api_key
+      type: apiKey
+    basicAuth:
+      scheme: basic
+      type: http
+    bearerAuth:
+      bearerFormat: JWT
+      scheme: bearer
+      type: http

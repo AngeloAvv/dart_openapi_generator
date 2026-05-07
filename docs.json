@@ -1,0 +1,27 @@
+{
+  "name": "dart_openapi_generator",
+  "description": "Native-Dart OpenAPI 3.x → Dart code generator",
+  "repository": "https://github.com/AngeloAvv/dart_openapi_generator",
+  "sidebar": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "index",
+        "getting-started"
+      ]
+    },
+    {
+      "group": "Reference",
+      "pages": [
+        "annotation-reference",
+        "generated-code"
+      ]
+    },
+    {
+      "group": "Advanced",
+      "pages": [
+        "advanced"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+# Source: OpenAPI Petstore (OpenAPI 3.1 nullable style)
+# Requirements exercised: PARSE-06, PARSE-11
+# Feature: OpenAPI 3.1 type:[T,null] normalization → isNullable=true
+openapi: "3.1.0"
+info:
+  title: "Petstore Nullable 3.1 Fixture"
+  version: "1.0.0"
+paths:
+  /pets/{id}:
+    get:
+      operationId: getPet
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A pet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        "404":
+          description: Not found
+components:
+  schemas:
+    Pet:
+      type: object
+      description: "A pet in the store (OpenAPI 3.1 nullable style)"
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        owner:
+          type: ["string", "null"]
+          description: "The owner's name; null if unowned"
+        tag:
+          type: ["string", "null"]
+      required:
+        - id
+        - name

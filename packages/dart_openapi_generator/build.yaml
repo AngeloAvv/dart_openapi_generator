@@ -1,0 +1,10 @@
+builders:
+  dart_openapi_generator:
+    import: "package:dart_openapi_generator/builder.dart"
+    builder_factories: ["dartOpenApiBuilder"]
+    build_extensions: {".dart": [".openapi_generator.g.dart"]}
+    auto_apply: dependents
+    # build_to: source emits a sentinel .g.dart next to the annotated file.
+    # OpenApiBuilder writes the real output to outputDir via dart:io.
+    build_to: source
+    required_inputs: [".dart"]

@@ -1,0 +1,28 @@
+# Source: Stripe public OpenAPI spec (structure derived, values anonymized)
+# Requirements exercised: PARSE-03, PARSE-11
+# Feature: Recursive $ref cycle — PaymentMethod → PaymentMethodDetails → PaymentMethod
+openapi: "3.0.3"
+info:
+  title: "Stripe Recursive Ref Fixture"
+  version: "1.0.0"
+paths: {}
+components:
+  schemas:
+    PaymentMethod:
+      type: object
+      description: "A payment method (may reference itself via details)"
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        details:
+          $ref: '#/components/schemas/PaymentMethodDetails'
+    PaymentMethodDetails:
+      type: object
+      description: "Details for a payment method; references back to PaymentMethod"
+      properties:
+        method:
+          $ref: '#/components/schemas/PaymentMethod'
+        description:
+          type: string

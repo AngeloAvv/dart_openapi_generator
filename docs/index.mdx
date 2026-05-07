@@ -1,0 +1,40 @@
+---
+title: "dart_openapi_generator"
+description: "Native-Dart, zero-Java OpenAPI 3.x → Dart code generator for Flutter and Dart."
+---
+
+Reads an OpenAPI 3.x spec (YAML or JSON, local file or HTTPS URL) and generates idiomatic
+Dio-based model classes and API client services via `build_runner`. No JVM. No Mustache.
+Generated code looks like a developer wrote it by hand.
+
+## Features
+
+- Generates `final class` model classes with `fromJson`, `toJson`, `copyWith`, `==`, and `hashCode`
+- Generates Dart `enum` types with `fromJson`/`toJson` switch expressions
+- Generates `sealed class` hierarchies for `oneOf` schemas with a discriminator
+- Flattens `allOf` schemas into a single merged class
+- Handles `additionalProperties` (typed or untyped)
+- Generates Dio-based service classes from OpenAPI paths — one file per tag
+- Generates an aggregator client class with static auth-helper factories (Bearer, API key header/query, HTTP Basic)
+- Supports `LocalSpec` (local YAML/JSON file) and `RemoteSpec` (HTTPS URL with optional request headers)
+- MD5-keyed cache — skips unchanged specs for fast incremental builds
+- Supports OpenAPI 3.0, 3.1, and 3.2 (including `in: querystring` and `additionalOperations`)
+- Zero runtime dependencies in the consumer's tree — `dart_openapi_generator` is a dev dependency
+
+## Installation
+
+```yaml title="pubspec.yaml"
+dependencies:
+  dart_openapi_generator_annotations: ^0.1.0
+  dio: ^5.0.0
+
+dev_dependencies:
+  dart_openapi_generator: ^0.1.0
+  build_runner: ^2.4.0
+```
+
+## Get Started
+
+Follow the [Getting Started guide](/getting-started) to go from zero to a working API client.
+
+See the [Annotation Reference](/annotation-reference) for every `@OpenApiGenerator` field.

@@ -1,0 +1,14 @@
+# Root workspace pubspec — coordinates all member packages.
+# This is NOT a publishable package; it is the pub workspaces root.
+# See: https://dart.dev/tools/pub/workspaces
+
+name: dart_openapi_generator_workspace
+publish_to: none
+
+environment:
+  sdk: "^3.6.0"
+
+workspace:
+  - packages/dart_openapi_generator_annotations
+  - packages/dart_openapi_generator
+  - example
