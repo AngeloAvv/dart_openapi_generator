@@ -2,7 +2,7 @@ name: dart_openapi_generator_annotations
 description: >-
   Annotation types for dart_openapi_generator — @OpenApiGenerator, LocalSpec,
   RemoteSpec, and DateTimeConverter. Zero runtime dependencies beyond meta.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/AngeloAvv/dart_openapi_generator
 homepage: https://docs.page/angeloavv/dart_openapi_generator
 issue_tracker: https://github.com/AngeloAvv/dart_openapi_generator/issues

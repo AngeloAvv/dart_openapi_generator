@@ -525,7 +525,16 @@ final class ModelGenerator {
             hashLines.add('  ${p.fieldName},');
           }
         }
-        m.body = Code('Object.hash(\n${hashLines.join('\n')}\n)');
+        // Object.hash accepts at most 20 positional arguments; fall back to
+        // Object.hashAll when props exceed that limit.
+        if (hashLines.length <= 20) {
+          m.body = Code('Object.hash(\n${hashLines.join('\n')}\n)');
+        } else {
+          final listItems = hashLines
+              .map((l) => l.trimRight().replaceAll(RegExp(r',$'), ''))
+              .join(',\n');
+          m.body = Code('Object.hashAll([\n$listItems,\n])');
+        }
       }
     });
   }
@@ -948,10 +957,10 @@ final class ModelGenerator {
   }
 
   bool _isGeneratedType(SchemaObject schema) {
-    return schema is ObjectSchema ||
-        schema is EnumSchema ||
-        schema is AllOfSchema ||
-        schema is OneOfSchema;
+    return (schema is ObjectSchema && schema.name != null) ||
+        (schema is EnumSchema && schema.name != null) ||
+        (schema is AllOfSchema && schema.name != null) ||
+        (schema is OneOfSchema && schema.name != null);
   }
 
   // ---------------------------------------------------------------------------

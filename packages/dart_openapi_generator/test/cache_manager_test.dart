@@ -155,7 +155,7 @@ void main() {
           matches(RegExp(r'^[a-f0-9]{32}:[a-f0-9]{32}:[a-f0-9]{32}$')),
         );
         // kGeneratorVersion is accessible and is the expected value.
-        expect(kGeneratorVersion, equals('0.1.0'));
+        expect(kGeneratorVersion, equals('0.1.1'));
       },
     );
   });

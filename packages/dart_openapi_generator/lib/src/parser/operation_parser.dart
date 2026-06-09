@@ -253,7 +253,7 @@ final class OperationParser {
     if (content != null) {
       final jsonContent = content['application/json'] as Map?;
       final schemaRaw = jsonContent?['schema'];
-      if (schemaRaw is Map) {
+      if (schemaRaw is Map && schemaRaw.isNotEmpty) {
         jsonSchema = _schemaParser.parse(
           Map<String, dynamic>.from(schemaRaw),
           '$pointer/content/application~1json/schema',
@@ -280,7 +280,7 @@ final class OperationParser {
     if (content != null) {
       final jsonContent = content['application/json'] as Map?;
       final schemaRaw = jsonContent?['schema'];
-      if (schemaRaw is Map) {
+      if (schemaRaw is Map && schemaRaw.isNotEmpty) {
         jsonSchema = _schemaParser.parse(
           Map<String, dynamic>.from(schemaRaw),
           '$pointer/content/application~1json/schema',

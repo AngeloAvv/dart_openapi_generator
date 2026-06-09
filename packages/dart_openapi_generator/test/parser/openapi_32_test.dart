@@ -54,6 +54,51 @@ paths:
       expect(op.parameters.first.location, equals('querystring'));
     });
 
+    test('empty response schema {} → jsonSchema is null (treated as void)', () {
+      const yaml = '''
+openapi: "3.0.3"
+info:
+  title: Test
+  version: v1
+paths:
+  /devices:
+    post:
+      operationId: registerDevice
+      responses:
+        "201":
+          description: Device registered
+          content:
+            application/json:
+              schema: {}
+''';
+      final doc = _parseYaml(yaml);
+      final op = doc.operations.first;
+      expect(op.responses['201']!.jsonSchema, isNull);
+    });
+
+    test('empty request body schema {} → jsonSchema is null', () {
+      const yaml = '''
+openapi: "3.0.3"
+info:
+  title: Test
+  version: v1
+paths:
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "201":
+          description: Created
+''';
+      final doc = _parseYaml(yaml);
+      final op = doc.operations.first;
+      expect(op.requestBody!.jsonSchema, isNull);
+    });
+
     test('additionalMethods stored on 3.2 spec (from fixture)', () async {
       final dir = await _fixturesDir();
       final fixtureFile = File(p.join(dir, 'openapi_32_features.yaml'));

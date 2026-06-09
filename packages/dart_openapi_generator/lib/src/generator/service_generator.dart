@@ -991,15 +991,33 @@ final class ServiceGenerator {
     var result = path;
     for (final p in pathParams) {
       final dartName = escapeKeyword(toLowerCamelCase(p.name));
+      // Enums must be serialized to their wire value before URL encoding.
+      // .toString() ensures int/double enum wire values become String for Uri.encodeComponent.
+      final valueExpr =
+          _pathParamNeedsToJson(p.schema)
+              ? '$dartName.toJson().toString()'
+              : dartName;
       result = result.replaceAll(
         '{${p.name}}',
-        '\${Uri.encodeComponent($dartName)}',
+        '\${Uri.encodeComponent($valueExpr)}',
       );
     }
     // Escape any single quotes present in the raw path so the emitted Dart
     // string literal remains syntactically valid.
     final escaped = result.replaceAll("'", r"\'");
     return "'$escaped'";
+  }
+
+  bool _pathParamNeedsToJson(SchemaObject schema) {
+    final effective = switch (schema) {
+      AllOfSchema() when schema.name == null && schema.schemas.isNotEmpty =>
+        schema.schemas.first,
+      _ => schema,
+    };
+    return switch (effective) {
+      EnumSchema() when effective.name != null => true,
+      _ => false,
+    };
   }
 
   String _pathToMethodSuffix(String path) {

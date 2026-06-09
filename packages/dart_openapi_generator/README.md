@@ -21,11 +21,11 @@ Add as a **dev dependency** only — it is never in your app's runtime dependenc
 ```yaml
 # pubspec.yaml
 dependencies:
-  dart_openapi_generator_annotations: ^0.1.0
+  dart_openapi_generator_annotations: ^0.1.1
   dio: ^5.0.0
 
 dev_dependencies:
-  dart_openapi_generator: ^0.1.0
+  dart_openapi_generator: ^0.1.1
   build_runner: ^2.4.0
 ```
 
@@ -162,7 +162,7 @@ final class User {
 | `oneOf` with `discriminator` | `sealed class` parent + one `final class` per variant; `fromJson` dispatches via switch expression on the discriminator property |
 | `additionalProperties` | `Map<String, V>` field named `additionalProperties` |
 
-`anyOf` is not supported in v0.1.0 and causes a build error.
+`anyOf` is not supported in v0.1.1 and causes a build error.
 
 ## Generated service classes
 
@@ -270,7 +270,7 @@ final client = MyApiClient(
 | `allOf` | Flat merge of all `object` members |
 | `oneOf` with `discriminator` | Sealed class + switch expression dispatch |
 | `oneOf` without `discriminator` | Parsed but `fromJson` throws `UnimplementedError` |
-| `anyOf` | Not supported in v0.1.0; causes a build error |
+| `anyOf` | Not supported in v0.1.1; causes a build error |
 | `securitySchemes` | `bearer`, `basic`, `apiKey` (header and query) |
 | Path parameters | Supported; URI-encoded via `Uri.encodeComponent` |
 | Query parameters | Supported (required and optional) |
@@ -286,7 +286,7 @@ final client = MyApiClient(
 When `skipIfSpecIsUnchanged: true` (the default), the builder computes an MD5 cache key from:
 
 - MD5 of the raw spec bytes
-- The generator version string (`0.1.0`)
+- The generator version string (`0.1.1`)
 - A canonical JSON object containing `outputDir`, `clientName`, `dateTimeConverter`, and `cleanOutput`
 
 Fields that do not affect generated output (`debugLogging`, `skipIfSpecIsUnchanged`, `cachePath`) are excluded from the key.

@@ -623,4 +623,110 @@ void main() {
       },
     );
   });
+
+  group('ModelGenerator — anonymous array items (items: {})', () {
+    test(
+      'array property with anonymous items schema → toJson emits list directly, no .toJson()',
+      () {
+        final doc = _makeDoc(
+          schemas: {
+            'PageDto': const ObjectSchema(
+              name: 'PageDto',
+              properties: [
+                SchemaProperty(
+                  specName: 'data',
+                  schema: ArraySchema(
+                    items: ObjectSchema(
+                      name: null,
+                      properties: [],
+                      required: [],
+                    ),
+                  ),
+                  isRequired: false,
+                ),
+              ],
+              required: [],
+            ),
+          },
+        );
+        final src = _source(doc, 'models/page_dto.dart');
+        expect(src, isNot(contains('.toJson()')));
+        expect(src, contains("if (data != null) 'data': data"));
+      },
+    );
+
+    test(
+      'array property with anonymous items schema → fromJson uses cast, not fromJson',
+      () {
+        final doc = _makeDoc(
+          schemas: {
+            'PageDto': const ObjectSchema(
+              name: 'PageDto',
+              properties: [
+                SchemaProperty(
+                  specName: 'data',
+                  schema: ArraySchema(
+                    items: ObjectSchema(
+                      name: null,
+                      properties: [],
+                      required: [],
+                    ),
+                  ),
+                  isRequired: false,
+                ),
+              ],
+              required: [],
+            ),
+          },
+        );
+        final src = _source(doc, 'models/page_dto.dart');
+        expect(src, contains('.cast<Map<String, dynamic>>()'));
+      },
+    );
+  });
+
+  group('ModelGenerator — hashCode with >20 fields', () {
+    SchemaProperty _strProp(String name) => SchemaProperty(
+      specName: name,
+      schema: const PrimitiveSchema(primitiveType: 'string'),
+      isRequired: true,
+    );
+
+    test(
+      'class with 21 string fields → hashCode uses Object.hashAll, not Object.hash',
+      () {
+        final props = List.generate(21, (i) => _strProp('field$i'));
+        final doc = _makeDoc(
+          schemas: {
+            'BigDto': ObjectSchema(
+              name: 'BigDto',
+              properties: props,
+              required: props.map((p) => p.specName).toList(),
+            ),
+          },
+        );
+        final src = _source(doc, 'models/big_dto.dart');
+        expect(src, contains('Object.hashAll(['));
+        expect(src, isNot(matches(RegExp(r'Object\.hash\([^)]{200,}'))));
+      },
+    );
+
+    test(
+      'class with 20 string fields → hashCode uses Object.hash (not Object.hashAll)',
+      () {
+        final props = List.generate(20, (i) => _strProp('field$i'));
+        final doc = _makeDoc(
+          schemas: {
+            'MedDto': ObjectSchema(
+              name: 'MedDto',
+              properties: props,
+              required: props.map((p) => p.specName).toList(),
+            ),
+          },
+        );
+        final src = _source(doc, 'models/med_dto.dart');
+        expect(src, contains('Object.hash('));
+      },
+    );
+  });
 }

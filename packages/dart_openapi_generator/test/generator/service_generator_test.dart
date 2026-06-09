@@ -458,6 +458,41 @@ void main() {
         expect(src, contains('Uri.encodeComponent(postId)'));
       },
     );
+
+    test(
+      'enum path param → source contains Uri.encodeComponent(pose.toJson().toString())',
+      () {
+        const poseEnum = EnumSchema(
+          name: 'PhotoPose',
+          enumType: 'string',
+          values: ['FRONT', 'BACK'],
+        );
+        final doc = _makeDocWithSchemas(
+          schemas: {'PhotoPose': poseEnum},
+          operations: [
+            const OperationItem(
+              path: '/photos/{pose}',
+              method: 'get',
+              operationId: 'getPhoto',
+              tags: ['photos'],
+              parameters: [
+                ParameterObject(
+                  name: 'pose',
+                  location: 'path',
+                  required: true,
+                  schema: poseEnum,
+                ),
+              ],
+              responses: {'200': _ok200},
+              security: [],
+              additionalMethods: [],
+            ),
+          ],
+        );
+        final src = _source(doc, 'services/photos_api.dart');
+        expect(src, contains('Uri.encodeComponent(pose.toJson().toString())'));
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -1522,6 +1557,38 @@ void main() {
           lessThan(zetaImportIdx),
           reason: 'alpha.dart import must appear before zeta.dart import',
         );
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Empty response schema → Future<void>
+  // -------------------------------------------------------------------------
+  group('ServiceGenerator — empty response schema {} → Future<void>', () {
+    test(
+      'operation with 201 response schema null (parsed from empty {}) → return type Future<void>',
+      () {
+        // When the spec has "schema: {}" the parser now sets jsonSchema = null.
+        // The service generator must then emit Future<void>, not RegisterDeviceResponse.
+        final doc = _makeDoc(
+          operations: [
+            const OperationItem(
+              path: '/devices',
+              method: 'post',
+              operationId: 'registerDevice',
+              tags: ['devices'],
+              parameters: [],
+              responses: {
+                '201': ResponseObject(statusCode: '201', jsonSchema: null),
+              },
+              security: [],
+              additionalMethods: [],
+            ),
+          ],
+        );
+        final src = _source(doc, 'services/devices_api.dart');
+        expect(src, contains('Future<void>'));
+        expect(src, isNot(contains('RegisterDeviceResponse')));
       },
     );
   });

@@ -21,11 +21,11 @@ This package defines the annotation types only. It does nothing at runtime. Pair
 ```yaml
 # pubspec.yaml
 dependencies:
-  dart_openapi_generator_annotations: ^0.1.0
+  dart_openapi_generator_annotations: ^0.1.1
   dio: ^5.0.0
 
 dev_dependencies:
-  dart_openapi_generator: ^0.1.0
+  dart_openapi_generator: ^0.1.1
   build_runner: ^2.4.0
 ```
 
