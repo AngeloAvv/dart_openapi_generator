@@ -1,0 +1,112 @@
+---
+title: "Getting Started"
+description: "Generate your first Dart API client from an OpenAPI spec."
+---
+
+This guide walks through setting up `dart_openapi_generator` in an existing Flutter or Dart
+project. By the end you will have a generated, type-safe API client ready to use. Only local
+OpenAPI spec files are supported — no remote/HTTPS spec URLs.
+
+<Steps>
+  <Step title="Add dependencies to pubspec.yaml">
+    Add these packages, then run `dart pub get`.
+
+    ```yaml title="pubspec.yaml"
+    dependencies:
+      dio: ^5.0.0
+
+    dev_dependencies:
+      dart_openapi_generator: ^0.2.0
+      build_runner: ^2.4.0
+    ```
+
+    `dart_openapi_generator` and `build_runner` are dev-only — nothing from this package ends up
+    in your app's runtime dependency tree.
+  </Step>
+
+  <Step title="Place your OpenAPI spec">
+    Copy your OpenAPI 3.x spec (YAML or JSON) into your project, for example at
+    `openapi/api.yaml`. The path is relative to your `pubspec.yaml`.
+
+    <Info>OpenAPI 3.0, 3.1, and 3.2 are all supported. Swagger 2.x is not supported.</Info>
+  </Step>
+
+  <Step title="Configure the builder in build.yaml">
+    Create (or edit) `build.yaml` at your project root:
+
+    ```yaml title="build.yaml"
+    targets:
+      $default:
+        builders:
+          dart_openapi_generator:
+            options:
+              input_spec: "openapi/api.yaml"
+              output_dir: "lib/generated"
+              client_name: "MyApiClient"
+    ```
+
+    `input_spec` and `output_dir` are the only required options. See
+    [Options Reference](/options-reference) for all options and their defaults.
+  </Step>
+
+  <Step title="Run code generation">
+    ```sh
+    dart run build_runner build
+    ```
+
+    <Info>Use `dart run build_runner watch` to automatically regenerate when your spec changes.</Info>
+
+    After generation, `lib/generated/` will contain:
+
+    - `api_client.dart` — the `MyApiClient` aggregator class
+    - `models/` — one `.dart` file per schema, in alphabetical order
+    - `services/` — one `.dart` file per OpenAPI tag, in alphabetical order
+    - `generated.dart` — a barrel that exports every generated file
+  </Step>
+
+  <Step title="Import the barrel">
+    Import the single barrel export so all generated types are available:
+
+    ```dart title="lib/main.dart"
+    import 'generated/generated.dart';
+    ```
+  </Step>
+
+  <Step title="Instantiate the client">
+    Create your client. If `baseUrl` is omitted, the URL from `servers[0]` in your spec is used.
+
+    ```dart
+    final client = MyApiClient(
+      baseUrl: 'https://api.example.com/v1',
+    );
+
+    // Call any generated service method:
+    final users = await client.users.listUsers();
+    ```
+
+    The constructor also accepts `dio` (inject a pre-configured `Dio` instance), `interceptors`,
+    `connectTimeout`, and `receiveTimeout`.
+  </Step>
+
+  <Step title="Add authentication (optional)">
+    If your spec declares `securitySchemes`, the generator emits static auth-helper factories on
+    the client class. Pass the factory's return value via `interceptors:`:
+
+    ```dart
+    final client = MyApiClient(
+      interceptors: [
+        MyApiClient.bearerAuth('your-bearer-token'),
+      ],
+    );
+    ```
+
+    Available factories depend on which security scheme types appear in your spec. See
+    [Advanced — Authentication](/advanced#authentication) for Bearer, API key, and Basic auth.
+  </Step>
+</Steps>
+
+## What's next?
+
+- [Options Reference](/options-reference) — full documentation of every `build.yaml` option
+- [Generated Code](/generated-code) — understand every generated file type
+- [Advanced](/advanced) — auth schemes, `date_time_converter`, and OpenAPI 3.2

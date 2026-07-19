@@ -1,0 +1,9 @@
+targets:
+  $default:
+    builders:
+      dart_openapi_generator:
+        options:
+          input_spec: "openapi/example_api.yaml"
+          output_dir: "lib/generated"
+          client_name: "ExampleApiClient"
+          debug_logging: true

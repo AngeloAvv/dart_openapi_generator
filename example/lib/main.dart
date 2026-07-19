@@ -1,22 +1,12 @@
-import 'package:dart_openapi_generator_annotations/dart_openapi_generator_annotations.dart';
-
 import 'generated/generated.dart';
 
-/// Marker class that triggers OpenAPI code generation via build_runner.
-///
-/// Run `dart run build_runner build` in this directory to generate:
+/// Run `dart run build_runner build --delete-conflicting-outputs` in this
+/// directory to generate (config lives in `build.yaml`, see the
+/// `dart_openapi_generator` options block):
 /// - lib/generated/models/         (one .dart file per schema)
 /// - lib/generated/services/       (one .dart file per tag)
 /// - lib/generated/api_client.dart (ExampleApiClient with auth factories)
 /// - lib/generated/generated.dart  (barrel export)
-@OpenApiGenerator(
-  inputSpec: LocalSpec('openapi/example_api.yaml'),
-  outputDir: 'lib/generated',
-  clientName: 'ExampleApiClient',
-  debugLogging: true,
-)
-class $ExampleApp {}
-
 void main() {
   final client = ExampleApiClient(
     baseUrl: 'https://api.example.com/v1',

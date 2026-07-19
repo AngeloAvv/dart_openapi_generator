@@ -1,0 +1,75 @@
+---
+title: "Options Reference"
+description: "Complete reference for the dart_openapi_generator build.yaml options block."
+---
+
+`dart_openapi_generator` is configured entirely through the `options:` block of your project's
+`build.yaml` — there is no Dart annotation. `input_spec`/`output_dir` must be readable
+**synchronously**, in the builder factory, before build_runner freezes its asset graph for the
+invocation; that's what lets every generated file be tracked in the graph and resolve correctly
+on the first `build_runner build` pass. Annotation-based (Dart element) resolution only becomes
+available once a build is already in progress, so it can't run early enough.
+
+```yaml title="build.yaml"
+targets:
+  $default:
+    builders:
+      dart_openapi_generator:
+        options:
+          input_spec: "openapi/api.yaml"
+          output_dir: "lib/generated"
+```
+
+## Options
+
+<Property name="input_spec" type="String" required>
+  Path to the OpenAPI spec file, relative to the package root (where `pubspec.yaml` lives).
+  Absolute paths are also accepted. **Local files only** — there is no remote/HTTPS spec support,
+  since the builder factory reads and parses the spec synchronously (no async HTTP in Dart).
+</Property>
+
+<Property name="output_dir" type="String" required>
+  Directory where generated Dart files are written, relative to the package root. Example:
+  `'lib/generated'`. The barrel file's name is derived from this path's last segment, not
+  hardcoded — `'lib/generated'` → `generated.dart`, `'lib/services/network/petstore_client'` →
+  `petstore_client.dart`. See [Generated Code](/generated-code) for the full output layout.
+</Property>
+
+<Property name="client_name" type="String">
+  Name of the generated aggregator client class. Defaults to `'ApiClient'`. Example:
+  `'PetstoreClient'`.
+</Property>
+
+<Property name="date_time_converter" type="String">
+  Strategy for serializing `string` + `format: date-time` schema fields — `'iso8601'` (default) or
+  `'timestamp'`. See [DateTimeConverter](#date_time_converter-1) below.
+</Property>
+
+<Property name="debug_logging" type="bool">
+  When `true`, the generator logs every file it prepares. Defaults to `false` (errors only).
+</Property>
+
+## date_time_converter
+
+Controls how `string` fields with `format: date-time` are serialized and deserialized in
+generated models. Applied globally — per-field overrides are not supported.
+
+| Value | `fromJson` | `toJson` | When to use |
+|-------|------------|----------|-------------|
+| `iso8601` (default) | `DateTime.parse(json['field'] as String)` | `instance.field.toIso8601String()` | REST APIs that exchange ISO 8601 strings |
+| `timestamp` | `DateTime.fromMillisecondsSinceEpoch(json['field'] as int)` | `instance.field.millisecondsSinceEpoch` | APIs that use Unix epoch milliseconds |
+
+```yaml title="build.yaml"
+targets:
+  $default:
+    builders:
+      dart_openapi_generator:
+        options:
+          input_spec: "openapi/api.yaml"
+          output_dir: "lib/generated"
+          date_time_converter: "timestamp"
+```
+
+---
+
+See also: [Generated Code](/generated-code) · [Advanced](/advanced)

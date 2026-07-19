@@ -13,46 +13,16 @@ jobs:
       matrix:
         working-directory:
           - example
-          - packages/dart_openapi_generator_annotations
-          - packages/dart_openapi_generator
+          - .
     uses: ./.github/workflows/analyze.yml
     with:
       working-directory: ${{ matrix.working-directory }}
 
   test:
-    name: Test ${{ matrix.working-directory }}
-    strategy:
-      matrix:
-        working-directory:
-          - packages/dart_openapi_generator_annotations
-          - packages/dart_openapi_generator
+    name: Test
     uses: ./.github/workflows/test.yml
     with:
-      working-directory: ${{ matrix.working-directory }}
-
-  dry_run_publish:
-    name: Dry-run publish check
-    runs-on: ubuntu-latest
-    needs:
-      - analyze
-      - test
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Dart SDK
-        uses: dart-lang/setup-dart@v1
-
-      - name: Get workspace dependencies
-        run: dart pub get
-
-      - name: Dry-run publish dart_openapi_generator_annotations
-        run: dart pub publish --dry-run
-        working-directory: packages/dart_openapi_generator_annotations
-
-      - name: Dry-run publish dart_openapi_generator
-        run: dart pub publish --dry-run
-        working-directory: packages/dart_openapi_generator
+      working-directory: .
 
   determinism:
     name: Determinism gate (build_runner)
@@ -93,4 +63,3 @@ jobs:
 
       - name: Check dart format idempotency
         run: dart format --set-exit-if-changed .
-

@@ -1,0 +1,15 @@
+builders:
+  dart_openapi_generator:
+    import: "package:dart_openapi_generator/builder.dart"
+    builder_factories: ["dartOpenApiBuilder"]
+    # The "$package$" key is load-bearing: build_runner decides which input
+    # to invoke this builder on from THIS static declaration, not from the
+    # constructed Builder's own `buildExtensions` getter — so it must use the
+    # same synthetic `$package$` key as `OpenApiBuilder.buildExtensions`
+    # (see open_api_builder.dart). The output value here is just a
+    # placeholder to satisfy build_config's schema; the real, per-project
+    # output list is computed synchronously in `dartOpenApiBuilder` (from the
+    # configured `input_spec`) and is what actually governs written assets.
+    build_extensions: {"$package$": ["lib/.openapi_generator_placeholder"]}
+    auto_apply: dependents
+    build_to: source
