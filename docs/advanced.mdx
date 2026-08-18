@@ -179,7 +179,8 @@ try {
 | `enum` (string, integer, number values) | Supported |
 | `allOf` (flat merge of object members) | Supported |
 | `oneOf` with `discriminator` | Supported |
-| `oneOf` without `discriminator` | Parsed, but `fromJson` throws `UnimplementedError` |
+| `oneOf` without `discriminator` | Supported; `fromJson` tries each variant, most specific first |
+| `oneOf` branch that is a `$ref` | Reused as a standalone class implementing the wrapper (see [Generated Code](/generated-code)) |
 | `anyOf` | Not supported — throws a parse error. Use `oneOf` with a discriminator instead. |
 | Same-document `$ref` (`#/components/schemas/…`) | Supported |
 | External `$ref` (URL or file path) | Not supported |
@@ -254,7 +255,8 @@ rename one schema or operation in the spec.
 - **No remote/HTTPS spec support.** `input_spec` must be a local file — the builder factory reads it synchronously, before any async I/O is possible.
 - **No `anyOf` support.** Schemas using `anyOf` cause a parse error. Use `oneOf` with a discriminator as an alternative.
 - **Same-document `$ref` only.** External file or URL references are not resolved — they cause a parse error. All referenced schemas must be in `components/schemas` of the same spec file.
-- **No `oneOf` without discriminator.** The sealed class is generated but `fromJson` throws `UnimplementedError` at runtime. The spec must include a `discriminator.propertyName`.
+- **`oneOf` without a discriminator decodes by trial.** `fromJson` tries the variants most-specific-first and returns the first that decodes. Two variants that accept the same payload are genuinely ambiguous — add a `discriminator.propertyName` to make the choice explicit.
+- **A `oneOf` wrapper shares its file with its `$ref` branches.** Dart only allows a `sealed` type to be implemented from inside its own library, so the wrapper and its branches are emitted together. Which file a model lands in therefore depends on the spec's `oneOf` graph; import the generated barrel (`generated.dart`), not individual model files.
 - **`in: cookie` parameters are not generated.** The generator logs a warning and recommends Dio interceptors for cookie-based auth.
 - **`requestBody` on GET/HEAD/OPTIONS is not sent.** A warning is logged; HTTP semantics prevent sending a body on these methods.
 - **Per-field `date_time_converter` overrides are not supported.** The setting applies globally.

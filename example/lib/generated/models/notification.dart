@@ -6,10 +6,11 @@ sealed class Notification {
   const Notification();
 
   factory Notification.fromJson(Map<String, dynamic> json) {
-    if (!json.containsKey('type')) {
-      throw ArgumentError('Missing discriminator key "type" in JSON');
+    final discriminator = json['type'];
+    if (discriminator == null) {
+      throw ArgumentError('Missing or null discriminator "type" in JSON');
     }
-    return switch (json['type']!.toString()) {
+    return switch (discriminator.toString()) {
       'email' => EmailNotification.fromJson(json),
       'push' => PushNotification.fromJson(json),
       final t => throw ArgumentError(
@@ -20,7 +21,7 @@ sealed class Notification {
   Map<String, dynamic> toJson();
 }
 
-final class EmailNotification extends Notification {
+final class EmailNotification implements Notification {
   const EmailNotification({
     required this.email,
     required this.type,
@@ -67,7 +68,7 @@ final class EmailNotification extends Notification {
       );
 }
 
-final class PushNotification extends Notification {
+final class PushNotification implements Notification {
   const PushNotification({
     required this.deviceToken,
     required this.type,

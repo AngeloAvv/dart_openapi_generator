@@ -194,7 +194,7 @@ final class SchemaParser {
     );
   }
 
-  OneOfSchema _parseOneOf(
+  SchemaObject _parseOneOf(
     Map<String, dynamic> raw,
     String pointer,
     String? name,
@@ -217,6 +217,29 @@ final class SchemaParser {
           null,
         ),
       );
+    }
+
+    // A single-branch oneOf in an inline position (a parameter, a body) is just
+    // that branch with extra ceremony: collapse it instead of generating a
+    // sealed wrapper with one case. Named schemas are left alone — collapsing
+    // '#/components/schemas/Foo: {oneOf: [Bar]}' would make Foo disappear.
+    //
+    // The wrapper's own keywords do not survive the collapse, with one
+    // exception: its `description` is carried onto the branch when the branch
+    // is inline and has none of its own (see [_withDescription]), so the
+    // documentation the spec author wrote on the wrapper still reaches the
+    // generated code. Deliberately NOT carried over:
+    //   - `description` onto a `$ref` branch — that branch IS the shared
+    //     component instance, and the component's own description wins;
+    //   - `description` when the branch already declares one — the more
+    //     specific text wins;
+    //   - `nullable` / `type: [T, 'null']` on the wrapper — [OneOfSchema] has
+    //     no nullability of its own today (the parser never populates
+    //     `isNullable` for `oneOf`), so nothing is lost relative to the
+    //     non-collapsed path. If `oneOf` ever gains nullability support, it
+    //     must be propagated here too.
+    if (variants.length == 1 && name == null && raw['discriminator'] == null) {
+      return _withDescription(variants.first, raw['description'] as String?);
     }
 
     // Discriminator (optional)
@@ -252,6 +275,65 @@ final class SchemaParser {
       discriminatorPropertyName: discriminatorPropertyName,
       discriminatorMapping: discriminatorMapping,
     );
+  }
+
+  /// Returns [schema] carrying [description], or [schema] unchanged when the
+  /// description cannot be applied.
+  ///
+  /// [SchemaObject] and its subtypes are immutable and have no `copyWith`, so
+  /// the carrier is a rebuild of the same subtype with the same fields. It is
+  /// applied only to inline schemas (`name == null`) that declare no
+  /// description of their own; a named schema is the instance shared by every
+  /// `$ref` to that component, and overwriting its description here would leak
+  /// one call site's wording into all the others. The cyclic-ref sentinel is
+  /// private to the model library and is returned untouched.
+  SchemaObject _withDescription(SchemaObject schema, String? description) {
+    if (description == null ||
+        schema.name != null ||
+        schema.description != null) {
+      return schema;
+    }
+    return switch (schema) {
+      ObjectSchema() => ObjectSchema(
+        description: description,
+        isNullable: schema.isNullable,
+        properties: schema.properties,
+        required: schema.required,
+        additionalProperties: schema.additionalProperties,
+      ),
+      EnumSchema() => EnumSchema(
+        description: description,
+        isNullable: schema.isNullable,
+        enumType: schema.enumType,
+        values: schema.values,
+      ),
+      PrimitiveSchema() => PrimitiveSchema(
+        description: description,
+        isNullable: schema.isNullable,
+        primitiveType: schema.primitiveType,
+        format: schema.format,
+      ),
+      ArraySchema() => ArraySchema(
+        description: description,
+        isNullable: schema.isNullable,
+        items: schema.items,
+      ),
+      AllOfSchema() => AllOfSchema(
+        description: description,
+        isNullable: schema.isNullable,
+        schemas: schema.schemas,
+      ),
+      OneOfSchema() => OneOfSchema(
+        description: description,
+        isNullable: schema.isNullable,
+        variants: schema.variants,
+        discriminatorPropertyName: schema.discriminatorPropertyName,
+        discriminatorMapping: schema.discriminatorMapping,
+      ),
+      NullSchema() => NullSchema(description: description),
+      // Cyclic-ref sentinel: not constructible from here.
+      _ => schema,
+    };
   }
 
   /// Validates that [discriminatorProperty] exists on every resolved variant.

@@ -1,4 +1,5 @@
 import 'package:dart_openapi_generator/src/generator/service_generator.dart';
+import 'package:dart_openapi_generator/src/layout/model_layout.dart';
 import 'package:dart_openapi_generator/src/model/schema_object.dart';
 import 'package:dart_openapi_generator/src/model/spec_document.dart';
 import 'package:dart_openapi_generator/src/name_registry/name_registry.dart';
@@ -32,8 +33,14 @@ SpecDocument _makeDocWithSchemas({
   securitySchemes: const {},
 );
 
-ServiceGenerator _makeGen(SpecDocument doc, {List<String>? warnings}) =>
-    ServiceGenerator(buildNameRegistry(doc), onWarning: warnings?.add);
+ServiceGenerator _makeGen(SpecDocument doc, {List<String>? warnings}) {
+  final registry = buildNameRegistry(doc);
+  return ServiceGenerator(
+    registry,
+    ModelLayout.build(doc, registry),
+    onWarning: warnings?.add,
+  );
+}
 
 String _source(SpecDocument doc, String filename, {List<String>? warnings}) {
   final result = _makeGen(doc, warnings: warnings).generate(doc);
@@ -493,6 +500,133 @@ void main() {
         expect(src, contains('Uri.encodeComponent(pose.toJson().toString())'));
       },
     );
+
+    test('int path param → converted before Uri.encodeComponent', () {
+      // Regression: Uri.encodeComponent takes a String, so an int parameter
+      // used to emit Uri.encodeComponent(id), which does not compile. The only
+      // workaround was to declare the parameter as a string in the spec.
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/servicearea/{id}',
+            method: 'get',
+            operationId: 'getServiceArea',
+            tags: ['area'],
+            parameters: [
+              ParameterObject(
+                name: 'id',
+                location: 'path',
+                required: true,
+                schema: _intSchema,
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/area_api.dart');
+
+      expect(src, contains('int id,'), reason: 'the Dart type stays int');
+      expect(src, contains('Uri.encodeComponent(id.toString())'));
+    });
+
+    test('bool and double path params are converted too', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/things/{ratio}/{flag}',
+            method: 'get',
+            operationId: 'getThing',
+            tags: ['thing'],
+            parameters: [
+              ParameterObject(
+                name: 'ratio',
+                location: 'path',
+                required: true,
+                schema: PrimitiveSchema(primitiveType: 'number'),
+              ),
+              ParameterObject(
+                name: 'flag',
+                location: 'path',
+                required: true,
+                schema: PrimitiveSchema(primitiveType: 'boolean'),
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/thing_api.dart');
+
+      expect(src, contains('Uri.encodeComponent(ratio.toString())'));
+      expect(src, contains('Uri.encodeComponent(flag.toString())'));
+    });
+
+    test('string path param is passed through unchanged', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/users/{id}',
+            method: 'get',
+            operationId: 'getUser',
+            tags: ['user'],
+            parameters: [
+              ParameterObject(
+                name: 'id',
+                location: 'path',
+                required: true,
+                schema: _strSchema,
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/user_api.dart');
+
+      expect(src, contains('Uri.encodeComponent(id)'));
+      expect(src, isNot(contains('id.toString()')));
+    });
+
+    test('array path param is converted and warns about style/explode', () {
+      final warnings = <String>[];
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/batch/{ids}',
+            method: 'get',
+            operationId: 'getBatch',
+            tags: ['batch'],
+            parameters: [
+              ParameterObject(
+                name: 'ids',
+                location: 'path',
+                required: true,
+                schema: ArraySchema(
+                  items: PrimitiveSchema(primitiveType: 'string'),
+                ),
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/batch_api.dart', warnings: warnings);
+
+      expect(src, contains('Uri.encodeComponent(ids.toString())'));
+      expect(
+        warnings,
+        contains(allOf(contains('Path parameter "ids"'), contains('style'))),
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1216,9 +1350,13 @@ void main() {
     );
 
     test(
-      'op with only 201 response (no 200) → onWarning called mentioning 201',
+      'ops with only a 201 response → one aggregated warning, not one per op',
       () {
         final warnings = <String>[];
+        const created = ResponseObject(
+          statusCode: '201',
+          jsonSchema: PrimitiveSchema(primitiveType: 'string'),
+        );
         final doc = _makeDoc(
           operations: [
             const OperationItem(
@@ -1227,22 +1365,50 @@ void main() {
               operationId: 'createThing',
               tags: ['thing'],
               parameters: [],
-              responses: {
-                '201': ResponseObject(
-                  statusCode: '201',
-                  jsonSchema: PrimitiveSchema(primitiveType: 'string'),
-                ),
-              },
+              responses: {'201': created},
+              security: [],
+              additionalMethods: [],
+            ),
+            const OperationItem(
+              path: '/widgets',
+              method: 'post',
+              operationId: 'createWidget',
+              tags: ['widget'],
+              parameters: [],
+              responses: {'201': created},
               security: [],
               additionalMethods: [],
             ),
           ],
         );
         _source(doc, 'services/thing_api.dart', warnings: warnings);
-        expect(warnings, isNotEmpty);
-        expect(warnings.any((w) => w.contains('201')), isTrue);
+        final non200 = warnings.where((w) => w.contains('non-200')).toList();
+        expect(non200, hasLength(1));
+        expect(non200.single, contains('2 operation(s)'));
+        expect(non200.single, contains('createThing (201)'));
+        expect(non200.single, contains('createWidget (201)'));
       },
     );
+
+    test('op whose primary response is 200 → no non-200 warning', () {
+      final warnings = <String>[];
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/things',
+            method: 'get',
+            operationId: 'listThings',
+            tags: ['thing'],
+            parameters: [],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      _source(doc, 'services/thing_api.dart', warnings: warnings);
+      expect(warnings.where((w) => w.contains('non-200')), isEmpty);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1421,7 +1587,10 @@ void main() {
         );
 
         // Build the generator using the empty registry (no inline schemas registered)
-        final gen = ServiceGenerator(registry);
+        final gen = ServiceGenerator(
+          registry,
+          ModelLayout.build(operationDoc, registry),
+        );
         final result = gen.generate(operationDoc);
         final src =
             result['services/unknown_api.dart'] ??
@@ -1591,5 +1760,308 @@ void main() {
         expect(src, isNot(contains('RegisterDeviceResponse')));
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // date-time parameters
+  // -------------------------------------------------------------------------
+  group('ServiceGenerator — date-time parameters', () {
+    const dateTimeSchema = PrimitiveSchema(
+      primitiveType: 'string',
+      format: 'date-time',
+    );
+
+    test('path param with format: date-time → typed DateTime', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/events/{at}',
+            method: 'get',
+            operationId: 'getEvent',
+            tags: ['event'],
+            parameters: [
+              ParameterObject(
+                name: 'at',
+                location: 'path',
+                required: true,
+                schema: dateTimeSchema,
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/event_api.dart');
+      expect(src, contains('DateTime at'));
+    });
+
+    test(
+      'date-time path param → interpolation uses toIso8601String(), not a bare '
+      'identifier nor toString()',
+      () {
+        final doc = _makeDoc(
+          operations: [
+            const OperationItem(
+              path: '/events/{at}',
+              method: 'get',
+              operationId: 'getEvent',
+              tags: ['event'],
+              parameters: [
+                ParameterObject(
+                  name: 'at',
+                  location: 'path',
+                  required: true,
+                  schema: dateTimeSchema,
+                ),
+              ],
+              responses: {'200': _ok200},
+              security: [],
+              additionalMethods: [],
+            ),
+          ],
+        );
+        final src = _source(doc, 'services/event_api.dart');
+        expect(src, contains(r'${Uri.encodeComponent(at.toIso8601String())}'));
+        expect(src, isNot(contains(r'${Uri.encodeComponent(at)}')));
+        expect(src, isNot(contains('at.toString()')));
+      },
+    );
+
+    test('plain string path param still interpolated without conversion', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/users/{id}',
+            method: 'get',
+            operationId: 'getUser',
+            tags: ['user'],
+            parameters: [
+              ParameterObject(
+                name: 'id',
+                location: 'path',
+                required: true,
+                schema: _strSchema,
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/user_api.dart');
+      expect(src, contains(r'${Uri.encodeComponent(id)}'));
+    });
+
+    test('date-time query param → serialized with toIso8601String()', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/events',
+            method: 'get',
+            operationId: 'listEvents',
+            tags: ['event'],
+            parameters: [
+              ParameterObject(
+                name: 'since',
+                location: 'query',
+                required: true,
+                schema: dateTimeSchema,
+              ),
+              ParameterObject(
+                name: 'until',
+                location: 'query',
+                required: false,
+                schema: dateTimeSchema,
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/event_api.dart');
+      expect(src, contains('since.toIso8601String()'));
+      expect(src, contains('until?.toIso8601String()'));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Object path parameter warning
+  // -------------------------------------------------------------------------
+  group('ServiceGenerator — object path parameter', () {
+    test('object path param → onWarning about unsupported serialization', () {
+      final warnings = <String>[];
+      final doc = _makeDocWithSchemas(
+        schemas: const {
+          'Filter': ObjectSchema(name: 'Filter', properties: [], required: []),
+        },
+        operations: [
+          const OperationItem(
+            path: '/search/{filter}',
+            method: 'get',
+            operationId: 'search',
+            tags: ['search'],
+            parameters: [
+              ParameterObject(
+                name: 'filter',
+                location: 'path',
+                required: true,
+                schema: ObjectSchema(
+                  name: 'Filter',
+                  properties: [],
+                  required: [],
+                ),
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      _source(doc, 'services/search_api.dart', warnings: warnings);
+      expect(
+        warnings.any(
+          (w) => w.contains('Path parameter "filter"') && w.contains('object'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('enum path param → no object warning', () {
+      final warnings = <String>[];
+      final doc = _makeDocWithSchemas(
+        schemas: const {
+          'Status': EnumSchema(
+            name: 'Status',
+            enumType: 'string',
+            values: ['a', 'b'],
+          ),
+        },
+        operations: [
+          const OperationItem(
+            path: '/things/{status}',
+            method: 'get',
+            operationId: 'getByStatus',
+            tags: ['thing'],
+            parameters: [
+              ParameterObject(
+                name: 'status',
+                location: 'path',
+                required: true,
+                schema: EnumSchema(
+                  name: 'Status',
+                  enumType: 'string',
+                  values: ['a', 'b'],
+                ),
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      _source(doc, 'services/thing_api.dart', warnings: warnings);
+      expect(
+        warnings.any((w) => w.contains('Path parameter "status"')),
+        isFalse,
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // List of a polymorphic oneOf
+  // -------------------------------------------------------------------------
+  group('ServiceGenerator — list of a polymorphic oneOf', () {
+    const payload = OneOfSchema(
+      name: 'Payload',
+      variants: [
+        ObjectSchema(name: 'Customer', properties: [], required: []),
+        PrimitiveSchema(primitiveType: 'string'),
+      ],
+    );
+
+    SpecDocument buildDoc() => _makeDocWithSchemas(
+      schemas: const {
+        'Customer': ObjectSchema(
+          name: 'Customer',
+          properties: [],
+          required: [],
+        ),
+        'Payload': payload,
+      },
+      operations: [
+        const OperationItem(
+          path: '/payloads',
+          method: 'get',
+          operationId: 'listPayloads',
+          tags: ['payload'],
+          parameters: [],
+          responses: {
+            '200': ResponseObject(
+              statusCode: '200',
+              jsonSchema: ArraySchema(items: payload),
+            ),
+          },
+          security: [],
+          additionalMethods: [],
+        ),
+      ],
+    );
+
+    test('array of a polymorphic union → item decode has no map cast', () {
+      final src = _source(buildDoc(), 'services/payload_api.dart');
+      expect(src, contains('Future<List<Payload>>'));
+      expect(src, contains('Payload.fromJson(e)'));
+      expect(src, isNot(contains('e as Map<String, dynamic>')));
+    });
+
+    test(
+      'array of a polymorphic union → Dio call stays typed List<dynamic>',
+      () {
+        final src = _source(buildDoc(), 'services/payload_api.dart');
+        expect(src, contains('<List<dynamic>>'));
+      },
+    );
+
+    SpecDocument buildBareDoc() => _makeDocWithSchemas(
+      schemas: const {
+        'Customer': ObjectSchema(
+          name: 'Customer',
+          properties: [],
+          required: [],
+        ),
+        'Payload': payload,
+      },
+      operations: [
+        const OperationItem(
+          path: '/payloads/{id}',
+          method: 'get',
+          operationId: 'getPayload',
+          tags: ['payload'],
+          parameters: [],
+          responses: {
+            '200': ResponseObject(statusCode: '200', jsonSchema: payload),
+          },
+          security: [],
+          additionalMethods: [],
+        ),
+      ],
+    );
+
+    test('bare polymorphic union → Dio call is dynamic and decode has no '
+        'map cast', () {
+      // The union can decode a String as well as a Customer, so the response
+      // body is not necessarily a JSON object.
+      final src = _source(buildBareDoc(), 'services/payload_api.dart');
+      expect(src, contains('_dio.get<dynamic>('));
+      expect(src, contains('Payload.fromJson(data)'));
+      expect(src, isNot(contains('as Map<String, dynamic>')));
+    });
   });
 }

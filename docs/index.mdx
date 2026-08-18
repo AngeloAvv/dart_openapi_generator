@@ -11,7 +11,7 @@ Generated code looks like a developer wrote it by hand.
 
 - Generates `final class` model classes with `fromJson`, `toJson`, `copyWith`, `==`, and `hashCode`
 - Generates Dart `enum` types with `fromJson`/`toJson` switch expressions
-- Generates `sealed class` hierarchies for `oneOf` schemas with a discriminator
+- Generates `sealed class` hierarchies for `oneOf` schemas, reusing referenced component schemas as branches
 - Flattens `allOf` schemas into a single merged class
 - Handles `additionalProperties` (typed or untyped)
 - Generates Dio-based service classes from OpenAPI paths — one file per tag

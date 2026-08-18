@@ -1,5 +1,6 @@
 import 'package:code_builder/code_builder.dart';
 
+import '../layout/model_layout.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
 import '../name_registry/keyword_escaper.dart';
@@ -15,7 +16,7 @@ import 'code_builder_helpers.dart';
 ///
 /// Usage:
 /// ```dart
-/// final generator = ServiceGenerator(registry);
+/// final generator = ServiceGenerator(registry, layout);
 /// final files = generator.generate(document);
 /// ```
 final class ServiceGenerator {
@@ -37,7 +38,11 @@ final class ServiceGenerator {
     'head',
   };
 
-  const ServiceGenerator(this._registry, {this.onWarning});
+  /// Where each model is declared, and which unions are polymorphic. Built
+  /// once per document by the caller, like [NameRegistry].
+  final ModelLayout _layout;
+
+  const ServiceGenerator(this._registry, this._layout, {this.onWarning});
 
   /// Generates one Dart source file per tag in [document].
   ///
@@ -57,12 +62,25 @@ final class ServiceGenerator {
     // Sort tag names alphabetically
     final sortedTags = tagGroups.keys.toList()..sort();
 
+    // Operations whose primary response is a non-200 2xx. Collected per
+    // generate() call — this class is const-constructed and immutable, so the
+    // accumulator is a local threaded through the builders — and reported as a
+    // single aggregated warning instead of one line per operation.
+    final non200Primary = <String>[];
+
     final result = <String, String>{};
     for (final tag in sortedTags) {
       final ops = tagGroups[tag]!;
       final fileName = _tagToFileName(tag);
-      final source = _emitServiceFile(tag, ops);
+      final source = _emitServiceFile(tag, ops, non200Primary);
       result[fileName] = source;
+    }
+
+    if (non200Primary.isNotEmpty) {
+      onWarning?.call(
+        '${non200Primary.length} operation(s) use a non-200 2xx response as '
+        'the primary response: ${non200Primary.join(', ')}.',
+      );
     }
     return result;
   }
@@ -71,7 +89,11 @@ final class ServiceGenerator {
   // Library builder
   // ---------------------------------------------------------------------------
 
-  String _emitServiceFile(String tag, List<OperationItem> ops) {
+  String _emitServiceFile(
+    String tag,
+    List<OperationItem> ops,
+    List<String> non200Primary,
+  ) {
     final className = _tagToClassName(tag);
     final imports = _collectImports(ops);
 
@@ -109,7 +131,7 @@ final class ServiceGenerator {
             );
 
             for (final op in sortedOps) {
-              c.methods.add(_buildMethod(op));
+              c.methods.add(_buildMethod(op, non200Primary));
             }
 
             // Emit additionalMethod stubs after all standard methods
@@ -160,20 +182,28 @@ final class ServiceGenerator {
   /// Handles anonymous allOf wrappers (OpenAPI 3.0 nullable pattern) by
   /// inspecting the first schema in the list.
   void _addParamSchemaImport(SchemaObject schema, Set<String> importSet) {
-    final effective = switch (schema) {
-      AllOfSchema() when schema.name == null && schema.schemas.isNotEmpty =>
-        schema.schemas.first,
-      _ => schema,
-    };
+    final effective = _effectiveSchema(schema);
     if (effective.name == null) return;
     // PrimitiveSchema aliases (e.g. LocalDate → String) have no generated model file.
     if (effective is PrimitiveSchema) return;
+    final import = _modelImport(effective.name!);
+    if (import != null) importSet.add(import);
+  }
+
+  /// Import path for the file declaring [specName], or null when the schema
+  /// has no generated model file.
+  ///
+  /// The file comes from [ModelLayout]: a `oneOf` branch is declared in its
+  /// wrapper's library, not in a file named after itself.
+  String? _modelImport(String specName) {
     try {
-      final dartName = _registry.dartClassName(effective.name!);
-      importSet.add('../models/${toSnakeCase(dartName)}.dart');
+      _registry.dartClassName(specName);
     } on StateError {
-      return;
+      return null;
     }
+    final file = _layout.fileFor(specName);
+    if (file.isEmpty) return null;
+    return '../models/$file';
   }
 
   void _addSchemaImports(
@@ -215,25 +245,17 @@ final class ServiceGenerator {
       return;
     }
 
-    String? dartName;
+    final String specName;
     if (schema.name != null) {
-      try {
-        dartName = _registry.dartClassName(schema.name!);
-      } on StateError {
-        return; // not registered — no import
-      }
+      specName = schema.name!;
     } else {
       // Inline schema: look up computed name
       final base = _methodBaseName(op);
-      final computedName = isRequest ? '${base}Request' : '${base}Response';
-      try {
-        dartName = _registry.dartClassName(computedName);
-      } on StateError {
-        return; // not registered — Map<String,dynamic> fallback, no import
-      }
+      specName = isRequest ? '${base}Request' : '${base}Response';
     }
 
-    importSet.add('../models/${toSnakeCase(dartName)}.dart');
+    final import = _modelImport(specName);
+    if (import != null) importSet.add(import);
   }
 
   List<String> _collectImports(List<OperationItem> ops) {
@@ -245,7 +267,7 @@ final class ServiceGenerator {
   // Method builder
   // ---------------------------------------------------------------------------
 
-  Method _buildMethod(OperationItem op) {
+  Method _buildMethod(OperationItem op, List<String> non200Primary) {
     final pathParams =
         op.parameters.where((p) => p.location == 'path').toList();
     final queryParams =
@@ -265,7 +287,7 @@ final class ServiceGenerator {
       );
     }
 
-    final returnType = _resolveReturnType(op);
+    final returnType = _resolveReturnType(op, non200Primary);
     final methodName = _methodName(op);
     final orderedPathParams = _extractPathParamOrder(op.path, pathParams);
     final hasBody = op.requestBody?.jsonSchema != null;
@@ -541,6 +563,16 @@ final class ServiceGenerator {
     final bool isVoid = returnType == 'Future<void>';
     final bool isList = returnType.startsWith('Future<List<');
     final bool isMap = returnType == 'Future<Map<String, dynamic>>';
+    // For a list response the union class is the *item* type, so
+    // `Future<List<X>>` has to be unwrapped twice before asking the layout —
+    // otherwise a list of a polymorphic union is decoded as if every element
+    // were a JSON object.
+    final innerType =
+        isList
+            ? RegExp(r'^Future<List<(.+)>>$').firstMatch(returnType)?.group(1)
+            : RegExp(r'^Future<(.+)>$').firstMatch(returnType)?.group(1);
+    final bool isPolymorphic =
+        innerType != null && _layout.isPolymorphicUnion(innerType);
 
     return Block.of([
       ..._buildWarningComments(op),
@@ -556,6 +588,7 @@ final class ServiceGenerator {
         isDeleteLike: isDeleteLike,
         isVoid: isVoid,
         isList: isList,
+        isPolymorphic: isPolymorphic,
         hasBody: hasBody,
         bodyRequired: bodyRequired,
         bodyType: bodyType,
@@ -565,6 +598,7 @@ final class ServiceGenerator {
         isVoid: isVoid,
         isList: isList,
         isMap: isMap,
+        isPolymorphic: isPolymorphic,
       ),
     ]);
   }
@@ -661,6 +695,7 @@ final class ServiceGenerator {
     required bool isDeleteLike,
     required bool isVoid,
     required bool isList,
+    required bool isPolymorphic,
     required bool hasBody,
     required bool bodyRequired,
     required String? bodyType,
@@ -681,8 +716,15 @@ final class ServiceGenerator {
     final dioTypeParam =
         isVoid
             ? 'void'
+            // A list of a polymorphic union is still a JSON list at the top
+            // level; only its elements are untyped.
             : isList
             ? 'List<dynamic>'
+            // A polymorphic oneOf may arrive as an object or as a list, so the
+            // response is not typed at the Dio level; the wrapper's fromJson
+            // decides.
+            : isPolymorphic
+            ? 'dynamic'
             : 'Map<String, dynamic>';
 
     final namedArgs = <String, Expression>{};
@@ -729,6 +771,7 @@ final class ServiceGenerator {
     required bool isVoid,
     required bool isList,
     required bool isMap,
+    required bool isPolymorphic,
   }) {
     if (isVoid) return const [];
 
@@ -765,7 +808,12 @@ final class ServiceGenerator {
                 m.requiredParameters.add(Parameter((p) => p.name = 'e'));
                 m.body =
                     refer(innerType!).property('fromJson').call([
-                      refer('e').asA(refer('Map<String, dynamic>')),
+                      // A polymorphic union accepts Object?: an element may be
+                      // an array or a primitive, so casting it to a JSON map
+                      // would throw at runtime on exactly those branches.
+                      isPolymorphic
+                          ? refer('e')
+                          : refer('e').asA(refer('Map<String, dynamic>')),
                     ]).code;
               }).closure,
             ])
@@ -810,6 +858,13 @@ final class ServiceGenerator {
 
   Expression _qpValueExpr(ParameterObject p) {
     final dart = escapeKeyword(toLowerCamelCase(p.name));
+    // Dio stringifies query values with toString(), which for a DateTime emits
+    // "2026-08-18 10:00:00.000" instead of an ISO-8601 instant.
+    if (_paramIsDateTime(p.schema)) {
+      return p.required
+          ? refer(dart).property('toIso8601String').call([])
+          : refer(dart).nullSafeProperty('toIso8601String').call([]);
+    }
     final needsJson = _paramNeedsToJson(p.schema);
     if (!needsJson) return refer(dart);
     return p.required
@@ -831,7 +886,13 @@ final class ServiceGenerator {
           .firstOrNull
           ?.value;
 
-  String _resolveReturnType(OperationItem op) {
+  /// Resolves the Dart return type of [op], recording into [non200Primary] the
+  /// operations whose primary 2xx response is not `200`.
+  ///
+  /// Picking e.g. `201` when it is the only declared success response is
+  /// correct behaviour, so it is not worth a warning per operation; the caller
+  /// emits a single aggregated line at the end of [generate].
+  String _resolveReturnType(OperationItem op, List<String> non200Primary) {
     final primary = _selectPrimary2xx(op.responses);
     if (primary == null) {
       onWarning?.call(
@@ -840,11 +901,9 @@ final class ServiceGenerator {
       );
       return 'Future<void>';
     }
-    // Warn on non-200 2xx fallback
     if (primary.statusCode != '200' && primary.statusCode.startsWith('2')) {
-      onWarning?.call(
-        'Operation "${op.operationId ?? "${op.method} ${op.path}"}" using '
-        '${primary.statusCode} as primary response (no 200 found).',
+      non200Primary.add(
+        '${op.operationId ?? "${op.method} ${op.path}"} (${primary.statusCode})',
       );
     }
     final schema = primary.jsonSchema;
@@ -938,6 +997,10 @@ final class ServiceGenerator {
       return targetClass;
     }
     return switch (schema) {
+      // Mirrors ModelGenerator's primitive mapping: string + date-time is a
+      // DateTime, not a String.
+      PrimitiveSchema(primitiveType: 'string', format: 'date-time') =>
+        'DateTime',
       PrimitiveSchema(primitiveType: 'string') => 'String',
       PrimitiveSchema(primitiveType: 'integer') => 'int',
       PrimitiveSchema(primitiveType: 'number') => 'double',
@@ -969,11 +1032,7 @@ final class ServiceGenerator {
   /// Enums, objects, and named allOf/oneOf wrappers have a `.toJson()` method.
   /// Primitives and anonymous schemas do not.
   bool _paramNeedsToJson(SchemaObject schema) {
-    final effective = switch (schema) {
-      AllOfSchema() when schema.name == null && schema.schemas.isNotEmpty =>
-        schema.schemas.first,
-      _ => schema,
-    };
+    final effective = _effectiveSchema(schema);
     return switch (effective) {
       EnumSchema() when effective.name != null => true,
       ObjectSchema() when effective.name != null => true,
@@ -991,12 +1050,38 @@ final class ServiceGenerator {
     var result = path;
     for (final p in pathParams) {
       final dartName = escapeKeyword(toLowerCamelCase(p.name));
-      // Enums must be serialized to their wire value before URL encoding.
-      // .toString() ensures int/double enum wire values become String for Uri.encodeComponent.
-      final valueExpr =
-          _pathParamNeedsToJson(p.schema)
-              ? '$dartName.toJson().toString()'
-              : dartName;
+      // Uri.encodeComponent takes a String, so every parameter that is not one
+      // has to be converted first — otherwise the generated service does not
+      // compile (an `int` path parameter used to emit
+      // `Uri.encodeComponent(id)`).
+      //
+      // Generated types serialize through toJson() to get their wire value;
+      // .toString() then covers enums whose wire values are numbers.
+      final String valueExpr;
+      if (_paramNeedsToJson(p.schema)) {
+        if (_pathParamIsObjectLike(p.schema)) {
+          onWarning?.call(
+            'Path parameter "${p.name}" is an object; serialized with '
+            'toJson().toString(), which writes a Dart map literal into the '
+            'URL. OpenAPI "style"/"explode" serialization of object path '
+            'parameters is not supported.',
+          );
+        }
+        valueExpr = '$dartName.toJson().toString()';
+      } else if (_pathParamIsString(p.schema)) {
+        valueExpr = dartName;
+      } else if (_paramIsDateTime(p.schema)) {
+        // Path params are always required, so no null-aware access is needed.
+        valueExpr = _dateTimeToWire(dartName);
+      } else {
+        if (p.schema is ArraySchema) {
+          onWarning?.call(
+            'Path parameter "${p.name}" is an array; serialized with '
+            'toString(). OpenAPI "style"/"explode" are not supported.',
+          );
+        }
+        valueExpr = '$dartName.toString()';
+      }
       result = result.replaceAll(
         '{${p.name}}',
         '\${Uri.encodeComponent($valueExpr)}',
@@ -1008,16 +1093,51 @@ final class ServiceGenerator {
     return "'$escaped'";
   }
 
-  bool _pathParamNeedsToJson(SchemaObject schema) {
-    final effective = switch (schema) {
-      AllOfSchema() when schema.name == null && schema.schemas.isNotEmpty =>
-        schema.schemas.first,
-      _ => schema,
-    };
-    return switch (effective) {
-      EnumSchema() when effective.name != null => true,
-      _ => false,
-    };
+  /// Unwraps an anonymous `allOf` wrapper (the OpenAPI 3.0 `nullable` pattern,
+  /// `allOf: [$ref, {nullable: true}]`) to the schema that actually carries the
+  /// type; any other schema is returned unchanged.
+  SchemaObject _effectiveSchema(SchemaObject schema) => switch (schema) {
+    AllOfSchema() when schema.name == null && schema.schemas.isNotEmpty =>
+      schema.schemas.first,
+    _ => schema,
+  };
+
+  /// Whether [schema] already produces a Dart `String`, i.e. needs no
+  /// conversion before [Uri.encodeComponent].
+  ///
+  /// `format: date-time` is excluded on purpose: it maps to `DateTime`, not to
+  /// `String` (see [_paramBaseType]), so it needs an explicit conversion.
+  bool _pathParamIsString(SchemaObject schema) {
+    final effective = _effectiveSchema(schema);
+    return effective is PrimitiveSchema &&
+        effective.primitiveType == 'string' &&
+        effective.format != 'date-time';
+  }
+
+  /// Whether [schema] produces a Dart `DateTime` and therefore has to be
+  /// serialized explicitly before being written to a URL or a query string.
+  bool _paramIsDateTime(SchemaObject schema) {
+    final effective = _effectiveSchema(schema);
+    return effective is PrimitiveSchema &&
+        effective.primitiveType == 'string' &&
+        effective.format == 'date-time';
+  }
+
+  /// The expression serializing the `DateTime` held by [dartName].
+  ///
+  /// TODO: the configured `date_time_converter` is not honoured here. Unlike
+  /// `ModelGenerator`, [ServiceGenerator] is not given the `DateTimeConverter`,
+  /// so path and query parameters are always serialized as ISO-8601 (the
+  /// default converter) even when models use the `timestamp` converter.
+  String _dateTimeToWire(String dartName) => '$dartName.toIso8601String()';
+
+  /// Whether [schema] is a named object-like schema (object, allOf or oneOf)
+  /// as opposed to an enum, which serializes to a scalar wire value.
+  bool _pathParamIsObjectLike(SchemaObject schema) {
+    final effective = _effectiveSchema(schema);
+    return effective is ObjectSchema ||
+        effective is AllOfSchema ||
+        effective is OneOfSchema;
   }
 
   String _pathToMethodSuffix(String path) {

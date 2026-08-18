@@ -4,6 +4,8 @@ import '../generator/aggregator_generator.dart';
 import '../generator/model_generator.dart';
 import '../generator/service_generator.dart';
 import '../generator_config.dart';
+import '../layout/model_layout.dart';
+import '../layout/one_of_plan.dart';
 import '../name_registry/name_converter.dart';
 import '../name_registry/name_registry.dart';
 import '../parser/openapi_parser.dart';
@@ -56,14 +58,27 @@ final class OpenApiBuilder implements Builder {
     validateVersion(sniffResult.map['openapi'] as String?, sniffSourceMap);
     final parseResult = parseSpec(sniffResult.map, sniffSourceMap);
 
-    final registry = buildNameRegistry(parseResult.document);
+    // Classify every `oneOf` branch once; the registry, the layout and both
+    // generators all read that single plan.
+    final oneOfPlan = OneOfPlan.build(parseResult.document);
+    final registry = buildNameRegistry(
+      parseResult.document,
+      oneOfPlan: oneOfPlan,
+    );
+    final layout = ModelLayout.build(
+      parseResult.document,
+      registry,
+      oneOfPlan: oneOfPlan,
+    );
     final modelFiles = ModelGenerator(
       registry,
+      layout,
       config.dateTimeConverter,
       onWarning: onWarning,
     ).generate(parseResult.document);
     final serviceFiles = ServiceGenerator(
       registry,
+      layout,
       onWarning: onWarning,
     ).generate(parseResult.document);
     final aggregatorFiles = AggregatorGenerator(

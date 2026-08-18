@@ -35,6 +35,155 @@ void main() {
       });
     });
 
+    group('OneOfSchema', () {
+      test('multi-branch oneOf → OneOfSchema', () {
+        final result = _makeParser().parse({
+          'oneOf': [
+            {'type': 'string'},
+            {'type': 'integer'},
+          ],
+        }, '#');
+        expect(result, isA<OneOfSchema>());
+      });
+
+      test('single-branch inline oneOf collapses to the branch', () {
+        // A path parameter declared as oneOf: [{type: string}] is a String —
+        // wrapping it in a sealed class with one case helps nobody.
+        final result = _makeParser().parse({
+          'oneOf': [
+            {'type': 'string'},
+          ],
+        }, '#');
+        expect(result, isA<PrimitiveSchema>());
+        expect((result as PrimitiveSchema).primitiveType, 'string');
+      });
+
+      test(
+        'collapsed single-branch oneOf yields the branch, not a wrapper',
+        () {
+          // The branch keeps its own shape and metadata; nothing is re-wrapped.
+          final result = _makeParser().parse({
+            'oneOf': [
+              {
+                'type': 'array',
+                'items': {'type': 'integer'},
+                'description': 'the branch description',
+              },
+            ],
+          }, '#');
+          expect(result, isNot(isA<OneOfSchema>()));
+          expect(result, isA<ArraySchema>());
+          expect((result as ArraySchema).items, isA<PrimitiveSchema>());
+          expect(result.description, 'the branch description');
+        },
+      );
+
+      test('collapse carries the wrapper description onto a bare branch', () {
+        final result = _makeParser().parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {'type': 'string', 'format': 'uuid'},
+          ],
+        }, '#');
+        expect(result, isA<PrimitiveSchema>());
+        final s = result as PrimitiveSchema;
+        expect(s.description, 'the wrapper description');
+        // Rebuilding the branch must not drop its other fields.
+        expect(s.primitiveType, 'string');
+        expect(s.format, 'uuid');
+      });
+
+      test('collapse keeps the branch description when it has one', () {
+        final result = _makeParser().parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {'type': 'string', 'description': 'the branch description'},
+          ],
+        }, '#');
+        expect(
+          (result as PrimitiveSchema).description,
+          'the branch description',
+        );
+      });
+
+      test('collapse carries the wrapper description onto a nested oneOf', () {
+        // The only branch is itself an inline union: collapsing must keep its
+        // variants and hand it the wrapper description.
+        final result = _makeParser().parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {
+              'oneOf': [
+                {'type': 'string'},
+                {'type': 'integer'},
+              ],
+            },
+          ],
+        }, '#');
+        expect(result, isA<OneOfSchema>());
+        final union = result as OneOfSchema;
+        expect(union.description, 'the wrapper description');
+        expect(union.variants, hasLength(2));
+        expect(
+          union.variants.map((v) => (v as PrimitiveSchema).primitiveType),
+          ['string', 'integer'],
+        );
+      });
+
+      test(r'collapse does not overwrite the description of a $ref branch', () {
+        final result = _makeParser({
+          'components': {
+            'schemas': {
+              'Bar': {
+                'type': 'object',
+                'properties': <String, dynamic>{},
+                'description': 'the component description',
+              },
+            },
+          },
+        }).parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {r'$ref': '#/components/schemas/Bar'},
+          ],
+        }, '#');
+        expect(result, isA<ObjectSchema>());
+        expect(result.name, 'Bar');
+        expect(result.description, 'the component description');
+      });
+
+      test('single-branch named oneOf is preserved', () {
+        // Collapsing '#/components/schemas/Foo: {oneOf: [Bar]}' would make the
+        // Foo component disappear from the generated API.
+        final result = _makeParser().parseWithName(
+          {
+            'oneOf': [
+              {'type': 'object', 'properties': <String, dynamic>{}},
+            ],
+          },
+          '#',
+          'Foo',
+        );
+        expect(result, isA<OneOfSchema>());
+        expect(result.name, 'Foo');
+      });
+
+      test('single-branch oneOf with a discriminator is preserved', () {
+        final result = _makeParser().parse({
+          'oneOf': [
+            {
+              'type': 'object',
+              'properties': {
+                'kind': {'type': 'string'},
+              },
+            },
+          ],
+          'discriminator': {'propertyName': 'kind'},
+        }, '#');
+        expect(result, isA<OneOfSchema>());
+      });
+    });
+
     group('EnumSchema (PARSE-05)', () {
       test('enum key → EnumSchema', () {
         final result = _makeParser().parse({
