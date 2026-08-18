@@ -58,6 +58,76 @@ void main() {
         expect((result as PrimitiveSchema).primitiveType, 'string');
       });
 
+      test(
+        'collapsed single-branch oneOf yields the branch, not a wrapper',
+        () {
+          // The branch keeps its own shape and metadata; nothing is re-wrapped.
+          final result = _makeParser().parse({
+            'oneOf': [
+              {
+                'type': 'array',
+                'items': {'type': 'integer'},
+                'description': 'the branch description',
+              },
+            ],
+          }, '#');
+          expect(result, isNot(isA<OneOfSchema>()));
+          expect(result, isA<ArraySchema>());
+          expect((result as ArraySchema).items, isA<PrimitiveSchema>());
+          expect(result.description, 'the branch description');
+        },
+      );
+
+      test('collapse carries the wrapper description onto a bare branch', () {
+        final result = _makeParser().parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {'type': 'string', 'format': 'uuid'},
+          ],
+        }, '#');
+        expect(result, isA<PrimitiveSchema>());
+        final s = result as PrimitiveSchema;
+        expect(s.description, 'the wrapper description');
+        // Rebuilding the branch must not drop its other fields.
+        expect(s.primitiveType, 'string');
+        expect(s.format, 'uuid');
+      });
+
+      test('collapse keeps the branch description when it has one', () {
+        final result = _makeParser().parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {'type': 'string', 'description': 'the branch description'},
+          ],
+        }, '#');
+        expect(
+          (result as PrimitiveSchema).description,
+          'the branch description',
+        );
+      });
+
+      test(r'collapse does not overwrite the description of a $ref branch', () {
+        final result = _makeParser({
+          'components': {
+            'schemas': {
+              'Bar': {
+                'type': 'object',
+                'properties': <String, dynamic>{},
+                'description': 'the component description',
+              },
+            },
+          },
+        }).parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {r'$ref': '#/components/schemas/Bar'},
+          ],
+        }, '#');
+        expect(result, isA<ObjectSchema>());
+        expect(result.name, 'Bar');
+        expect(result.description, 'the component description');
+      });
+
       test('single-branch named oneOf is preserved', () {
         // Collapsing '#/components/schemas/Foo: {oneOf: [Bar]}' would make the
         // Foo component disappear from the generated API.
