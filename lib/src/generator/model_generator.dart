@@ -973,6 +973,25 @@ final class ModelGenerator {
       }
       return (required: req, total: total);
     }
+    if (schema is OneOfSchema) {
+      // A union accepts any of its branches, so the payload it is guaranteed
+      // to require is the narrowest one: the minimum required count across
+      // branches. The total is the widest branch, since that is the most a
+      // payload of this union can carry. Without this a nested union scored
+      // (0, 0) and was always tried last among the class-shaped branches.
+      int? req;
+      var total = 0;
+      for (final variant in schema.variants) {
+        if (isCyclicRef(variant)) continue;
+        final shape = _schemaShape(variant);
+        req =
+            req == null
+                ? shape.required
+                : (shape.required < req ? shape.required : req);
+        if (shape.total > total) total = shape.total;
+      }
+      return (required: req ?? 0, total: total);
+    }
     return (required: 0, total: 0);
   }
 
@@ -1627,13 +1646,17 @@ final class ModelGenerator {
             "}",
           );
         }
+        // Guard on the value, not on the key: a payload carrying the key with
+        // a null value would otherwise reach `json[key]!` and fail with a bare
+        // TypeError instead of a diagnosable ArgumentError.
         buffer.writeln(
-          "if (!json.containsKey('$discriminatorPropertyName')) {\n"
-          "  throw ArgumentError('Missing discriminator key \"$discriminatorPropertyName\" in JSON');\n"
+          "final discriminator = json['$discriminatorPropertyName'];\n"
+          "if (discriminator == null) {\n"
+          "  throw ArgumentError('Missing or null discriminator \"$discriminatorPropertyName\" in JSON');\n"
           "}",
         );
         buffer.write(
-          "return switch (json['$discriminatorPropertyName']!.toString()) {\n${caseLines.join('\n')}\n};",
+          "return switch (discriminator.toString()) {\n${caseLines.join('\n')}\n};",
         );
         ctor.body = Code(buffer.toString());
         return;

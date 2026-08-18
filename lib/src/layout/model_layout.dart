@@ -180,18 +180,24 @@ final class ModelLayout {
 
   /// File declaring [specName], relative to `models/` — e.g. `'customer.dart'`.
   ///
-  /// Total: schemas the layout does not know about fall back to the file name
-  /// their own Dart class name implies. Applying that fallback in one place is
-  /// what keeps the model and the service generator importing the same file.
+  /// Total for every spec name the [NameRegistry] knows: a schema the layout
+  /// itself does not track falls back to the file name its own Dart class name
+  /// implies. Applying that fallback in one place is what keeps the model and
+  /// the service generator importing the same file.
+  ///
+  /// Throws [StateError] (from [NameRegistry.dartClassName]) for a name that is
+  /// not registered at all — there is no file to name in that case, and callers
+  /// must not invent one.
   String resolveFile(String specName) =>
       fileOf(specName) ??
       '${toSnakeCase(_registry.dartClassName(specName))}.dart';
 
   /// File declaring [specName], relative to `models/` — e.g. `'customer.dart'`.
   ///
-  /// Thin alias of [resolveFile], kept for existing callers. Never returns an
-  /// empty string: a caller that treats the result as "no import" would emit a
-  /// file referencing a type it does not import.
+  /// Thin alias of [resolveFile], kept for existing callers, with the same
+  /// contract: total for registered spec names, [StateError] for unregistered
+  /// ones. Never returns an empty string — a caller that treated the result as
+  /// "no import" would emit a file referencing a type it does not import.
   String fileFor(String specName) => resolveFile(specName);
 
   /// All file names, sorted.
