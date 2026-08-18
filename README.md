@@ -154,7 +154,7 @@ final class User {
 | `type: array` (top-level) | `typedef Name = List<ItemType>;` |
 | `enum` | Dart `enum` with `static Name fromJson(T v)` and `T toJson()` methods |
 | `allOf` | Flat-merged `final class` (properties from all `object` members combined) |
-| `oneOf` with `discriminator` | `sealed class` parent + one `final class` per variant; `fromJson` dispatches via switch expression on the discriminator property |
+| `oneOf` | `sealed class` parent; each `$ref` branch stays a standalone class that `implements` it, declared in the same file as the parent. With a `discriminator`, `fromJson` dispatches via switch expression; without one, it tries each variant in turn |
 | `additionalProperties` | `Map<String, V>` field named `additionalProperties` |
 
 `anyOf` is not supported and causes a build error.
@@ -264,7 +264,7 @@ final client = MyApiClient(
 | `array` with `items` | Supported |
 | `allOf` | Flat merge of all `object` members |
 | `oneOf` with `discriminator` | Sealed class + switch expression dispatch |
-| `oneOf` without `discriminator` | Parsed but `fromJson` throws `UnimplementedError` |
+| `oneOf` without `discriminator` | Sealed class + `fromJson` that tries each variant, most specific first |
 | `anyOf` | Not supported; causes a build error |
 | `securitySchemes` | `bearer`, `basic`, `apiKey` (header and query) |
 | Path parameters | Supported; URI-encoded via `Uri.encodeComponent` |

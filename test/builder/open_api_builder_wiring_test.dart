@@ -8,6 +8,7 @@ import 'package:dart_openapi_generator/src/date_time_converter.dart';
 import 'package:dart_openapi_generator/src/generator/aggregator_generator.dart';
 import 'package:dart_openapi_generator/src/generator/model_generator.dart';
 import 'package:dart_openapi_generator/src/generator_config.dart';
+import 'package:dart_openapi_generator/src/layout/model_layout.dart';
 import 'package:dart_openapi_generator/src/model/schema_object.dart';
 import 'package:dart_openapi_generator/src/model/spec_document.dart';
 import 'package:dart_openapi_generator/src/name_registry/name_registry.dart';
@@ -118,6 +119,103 @@ class _DownstreamBuilder implements Builder {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The spec from HANDOVER-dart-openapi-generator-bug.md, verbatim in shape:
+/// two components used as `oneOf` branches by both the request and the
+/// response of one endpoint, plus a third component referencing one of them
+/// the ordinary way.
+const _oneOfRefSpec = r'''
+openapi: 3.0.0
+info:
+  title: oneOf repro
+  version: 1.0.0
+paths:
+  /register:
+    post:
+      operationId: register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/Customer'
+                - $ref: '#/components/schemas/Driver'
+      responses:
+        '201':
+          description: ok
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Customer'
+                  - $ref: '#/components/schemas/Driver'
+  /agency:
+    get:
+      operationId: getAgency
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agency'
+components:
+  schemas:
+    Customer:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+    Driver:
+      type: object
+      required: [id, license]
+      properties:
+        id:
+          type: string
+        license:
+          type: string
+    Agency:
+      type: object
+      required: [id, customer]
+      properties:
+        id:
+          type: string
+        customer:
+          $ref: '#/components/schemas/Customer'
+''';
+
+/// A component whose name is also the one the string branch of `Foo` would
+/// synthesise for its value holder.
+const _nameCollisionSpec = r'''
+openapi: 3.0.0
+info:
+  title: synthesised name collision
+  version: 1.0.0
+paths:
+  /foo:
+    get:
+      operationId: getFoo
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Foo'
+components:
+  schemas:
+    FooString:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+    Foo:
+      oneOf:
+        - type: string
+        - $ref: '#/components/schemas/FooString'
+''';
+
 void main() {
   // -------------------------------------------------------------------------
   // Single-pass regression test — this is the fix for the bug documented in
@@ -178,6 +276,105 @@ void main() {}
   });
 
   // -------------------------------------------------------------------------
+  // oneOf + $ref regression — HANDOVER-dart-openapi-generator-bug.md
+  // -------------------------------------------------------------------------
+  group(r'oneOf with $ref branches (regression)', () {
+    test('emits every referenced model and nothing twice', () async {
+      final tmpDir = await Directory.systemTemp.createTemp('one_of_ref_test_');
+      addTearDown(() => tmpDir.delete(recursive: true));
+      final specFile = File('${tmpDir.path}/openapi.yaml');
+      await specFile.writeAsString(_oneOfRefSpec);
+
+      final openApiBuilder = dartOpenApiBuilder(
+        BuilderOptions({
+          'input_spec': specFile.path,
+          'output_dir': 'lib/generated',
+          'client_name': 'ReproClient',
+        }),
+      );
+
+      await testBuilders(
+        [openApiBuilder],
+        {'pkg|lib/placeholder.dart': 'void main() {}'},
+        // Exhaustive: testBuilders fails on any unlisted output. Before the
+        // fix this build produced register_request.dart AND
+        // register_response.dart, each declaring its own Customer, and no
+        // file at all for the Customer component that agency.dart imports.
+        outputs: {
+          'pkg|lib/generated/models/agency.dart': decodedMatches(
+            allOf(
+              contains("import 'register_request.dart';"),
+              isNot(contains("import 'customer.dart';")),
+              contains('final Customer customer;'),
+            ),
+          ),
+          'pkg|lib/generated/models/register_request.dart': decodedMatches(
+            allOf(
+              contains('sealed class RegisterRequest'),
+              contains('sealed class RegisterResponse'),
+              contains(
+                'final class Customer implements RegisterRequest, RegisterResponse',
+              ),
+              contains(
+                'final class Driver implements RegisterRequest, RegisterResponse',
+              ),
+            ),
+          ),
+          'pkg|lib/generated/api_client.dart': anything,
+          'pkg|lib/generated/generated.dart': anything,
+          'pkg|lib/generated/services/default_api.dart': anything,
+        },
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Synthesised branch name vs. real component name
+  // -------------------------------------------------------------------------
+  group('synthesised oneOf branch names', () {
+    test(
+      'a value holder gives way to the component that owns its name',
+      () async {
+        final tmpDir = await Directory.systemTemp.createTemp(
+          'one_of_name_collision_test_',
+        );
+        addTearDown(() => tmpDir.delete(recursive: true));
+        final specFile = File('${tmpDir.path}/openapi.yaml');
+        await specFile.writeAsString(_nameCollisionSpec);
+
+        final openApiBuilder = dartOpenApiBuilder(
+          BuilderOptions({
+            'input_spec': specFile.path,
+            'output_dir': 'lib/generated',
+            'client_name': 'CollisionClient',
+          }),
+        );
+
+        await testBuilders(
+          [openApiBuilder],
+          {'pkg|lib/placeholder.dart': 'void main() {}'},
+          // Exhaustive: testBuilders fails on any unlisted output. The value
+          // holder for the string branch would also be called FooString —
+          // registering it silently would declare the name in two files and
+          // make the barrel ambiguous.
+          outputs: {
+            'pkg|lib/generated/models/foo.dart': decodedMatches(
+              allOf(
+                contains('sealed class Foo'),
+                contains('final class FooString2 extends Foo'),
+                contains('final class FooString implements Foo'),
+              ),
+            ),
+            'pkg|lib/generated/api_client.dart': anything,
+            'pkg|lib/generated/generated.dart': anything,
+            'pkg|lib/generated/services/default_api.dart': anything,
+          },
+        );
+      },
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // Output layout: subdirectory paths
   // -------------------------------------------------------------------------
   group('output layout — subdirectory paths', () {
@@ -201,6 +398,7 @@ void main() {}
       final registry = buildNameRegistry(doc);
       final result = ModelGenerator(
         registry,
+        ModelLayout.build(doc, registry),
         DateTimeConverter.iso8601,
       ).generate(doc);
 

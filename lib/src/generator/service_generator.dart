@@ -1,10 +1,12 @@
 import 'package:code_builder/code_builder.dart';
 
+import '../layout/model_layout.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
 import '../name_registry/keyword_escaper.dart';
 import '../name_registry/name_converter.dart';
 import '../name_registry/name_registry.dart';
+import '../name_registry/one_of_variant_names.dart';
 import 'code_builder_emitter.dart';
 import 'code_builder_helpers.dart';
 
@@ -37,7 +39,13 @@ final class ServiceGenerator {
     'head',
   };
 
-  const ServiceGenerator(this._registry, {this.onWarning});
+  /// File layout for the document being generated. Assigned by [generate].
+  late ModelLayout _layout;
+
+  /// Dart class names of `oneOf` wrappers that can decode a non-object payload.
+  var _polymorphicUnions = <String>{};
+
+  ServiceGenerator(this._registry, {this.onWarning});
 
   /// Generates one Dart source file per tag in [document].
   ///
@@ -47,6 +55,14 @@ final class ServiceGenerator {
   /// Returns `Map<String, String>` where keys are `'services/<tag>_api.dart'`
   /// and values are Dart source strings.
   Map<String, String> generate(SpecDocument document) {
+    _layout = ModelLayout.build(document, _registry);
+    _polymorphicUnions = {
+      for (final entry in document.schemas.entries)
+        if (entry.value is OneOfSchema &&
+            oneOfIsPolymorphic(entry.value as OneOfSchema))
+          _registry.dartClassName(entry.key),
+    };
+
     // Group operations by effective tag: tags[0] or 'Default'
     final tagGroups = <String, List<OperationItem>>{};
     for (final op in document.operations) {
@@ -168,12 +184,24 @@ final class ServiceGenerator {
     if (effective.name == null) return;
     // PrimitiveSchema aliases (e.g. LocalDate → String) have no generated model file.
     if (effective is PrimitiveSchema) return;
+    final import = _modelImport(effective.name!);
+    if (import != null) importSet.add(import);
+  }
+
+  /// Import path for the file declaring [specName], or null when the schema
+  /// has no generated model file.
+  ///
+  /// The file comes from [ModelLayout]: a `oneOf` branch is declared in its
+  /// wrapper's library, not in a file named after itself.
+  String? _modelImport(String specName) {
     try {
-      final dartName = _registry.dartClassName(effective.name!);
-      importSet.add('../models/${toSnakeCase(dartName)}.dart');
+      _registry.dartClassName(specName);
     } on StateError {
-      return;
+      return null;
     }
+    final file = _layout.fileFor(specName);
+    if (file.isEmpty) return null;
+    return '../models/$file';
   }
 
   void _addSchemaImports(
@@ -215,25 +243,17 @@ final class ServiceGenerator {
       return;
     }
 
-    String? dartName;
+    final String specName;
     if (schema.name != null) {
-      try {
-        dartName = _registry.dartClassName(schema.name!);
-      } on StateError {
-        return; // not registered — no import
-      }
+      specName = schema.name!;
     } else {
       // Inline schema: look up computed name
       final base = _methodBaseName(op);
-      final computedName = isRequest ? '${base}Request' : '${base}Response';
-      try {
-        dartName = _registry.dartClassName(computedName);
-      } on StateError {
-        return; // not registered — Map<String,dynamic> fallback, no import
-      }
+      specName = isRequest ? '${base}Request' : '${base}Response';
     }
 
-    importSet.add('../models/${toSnakeCase(dartName)}.dart');
+    final import = _modelImport(specName);
+    if (import != null) importSet.add(import);
   }
 
   List<String> _collectImports(List<OperationItem> ops) {
@@ -541,6 +561,9 @@ final class ServiceGenerator {
     final bool isVoid = returnType == 'Future<void>';
     final bool isList = returnType.startsWith('Future<List<');
     final bool isMap = returnType == 'Future<Map<String, dynamic>>';
+    final bool isPolymorphic = _polymorphicUnions.contains(
+      RegExp(r'^Future<(.+)>$').firstMatch(returnType)?.group(1),
+    );
 
     return Block.of([
       ..._buildWarningComments(op),
@@ -556,6 +579,7 @@ final class ServiceGenerator {
         isDeleteLike: isDeleteLike,
         isVoid: isVoid,
         isList: isList,
+        isPolymorphic: isPolymorphic,
         hasBody: hasBody,
         bodyRequired: bodyRequired,
         bodyType: bodyType,
@@ -661,6 +685,7 @@ final class ServiceGenerator {
     required bool isDeleteLike,
     required bool isVoid,
     required bool isList,
+    required bool isPolymorphic,
     required bool hasBody,
     required bool bodyRequired,
     required String? bodyType,
@@ -681,6 +706,11 @@ final class ServiceGenerator {
     final dioTypeParam =
         isVoid
             ? 'void'
+            // A polymorphic oneOf may arrive as an object or as a list, so the
+            // response is not typed at the Dio level; the wrapper's fromJson
+            // decides.
+            : isPolymorphic
+            ? 'dynamic'
             : isList
             ? 'List<dynamic>'
             : 'Map<String, dynamic>';

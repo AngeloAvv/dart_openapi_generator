@@ -239,14 +239,25 @@ For an OpenAPI `allOf` schema, the generator merges all `object` members into a 
 the first occurrence (a warning is emitted when types conflict), and `required` lists are
 unioned. The resulting class has the same structure as a plain object class.
 
-## Model: oneOf with Discriminator
+## Model: oneOf
 
-For an OpenAPI `oneOf` schema with a `discriminator`, the generator emits a `sealed class`
-parent and one `final class` per variant. All variants are inlined into the single parent
-file — no separate files per variant.
+For an OpenAPI `oneOf` schema the generator emits a `sealed class` parent, so that
+`switch` over the union is checked for exhaustiveness by the compiler.
 
-The parent's `factory fromJson` checks that the discriminator key is present, then dispatches
-to the correct variant using a switch expression:
+A branch that is a `$ref` to a component schema stays what it is: a standalone,
+reusable class. It is **not** re-declared as a private subtype of the wrapper —
+other schemas keep referencing it by name. Since Dart only allows a `sealed` type
+to be implemented from inside its own library, the wrapper and its `$ref` branches
+are emitted **into the same file**, and the branches declare `implements <Wrapper>`.
+
+<Info>
+This means the file a model lands in depends on the spec's `oneOf` graph: two
+unions that share a branch are emitted together. Class names never change, so
+import the generated barrel (`generated.dart`) rather than individual model files.
+</Info>
+
+The parent's `factory fromJson` checks that the discriminator key is present, then
+dispatches to the correct variant using a switch expression:
 
 ```dart title="lib/generated/models/notification.dart"
 // GENERATED CODE - DO NOT MODIFY BY HAND
@@ -271,7 +282,7 @@ sealed class Notification {
   Map<String, dynamic> toJson();
 }
 
-final class EmailNotification extends Notification {
+final class EmailNotification implements Notification {
   final String email;
   final String type;
 
@@ -315,8 +326,56 @@ Sealed classes enable exhaustive switch in your app code. Add a new variant to t
 regenerate — the Dart compiler will catch any unhandled case in existing switch expressions.
 </Info>
 
-A `oneOf` schema without a `discriminator` produces a `sealed class` whose `fromJson` always
-throws `UnimplementedError`. Add a discriminator to the spec to get a working `fromJson`.
+Because a branch is an ordinary class, the same component can be a branch of several
+unions — the request and the response of one endpoint, typically:
+
+```dart
+final class Customer implements RegisterRequest, RegisterResponse { ... }
+```
+
+### Without a discriminator
+
+`fromJson` tries the variants and returns the first that decodes:
+
+```dart
+factory RegisterRequest.fromJson(Map<String, dynamic> json) {
+  try {
+    return Driver.fromJson(json);
+  } catch (_) {}
+  try {
+    return Customer.fromJson(json);
+  } catch (_) {}
+  throw FormatException('RegisterRequest.fromJson: no variant matched the payload');
+}
+```
+
+Variants are ordered most-specific-first — by number of required properties, then
+declared properties, then spec order. A payload that satisfies two variants equally
+is genuinely ambiguous: add a `discriminator.propertyName` to the spec to decide it
+explicitly.
+
+### Branches that are not objects
+
+A branch such as `type: array` cannot implement the wrapper, so it is emitted as a
+class holding the decoded value. A union with such a branch cannot promise a JSON
+object, so `toJson`/`fromJson` widen to `Object?`:
+
+```dart
+sealed class GetPointsResponse {
+  factory GetPointsResponse.fromJson(Object? json) { ... }
+  Object? toJson();
+}
+
+final class GetPointsResponsePointList extends GetPointsResponse {
+  const GetPointsResponsePointList(this.value);
+  final List<Point> value;
+}
+```
+
+### Single-branch oneOf
+
+A `oneOf` with one branch, written inline (on a parameter or a body), is collapsed
+to that branch — no wrapper is generated.
 
 ## Service
 

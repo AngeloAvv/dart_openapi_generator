@@ -1,5 +1,6 @@
 import 'package:dart_openapi_generator/src/date_time_converter.dart';
 import 'package:dart_openapi_generator/src/generator/model_generator.dart';
+import 'package:dart_openapi_generator/src/layout/model_layout.dart';
 import 'package:dart_openapi_generator/src/model/schema_object.dart';
 import 'package:dart_openapi_generator/src/model/spec_document.dart';
 import 'package:dart_openapi_generator/src/name_registry/name_registry.dart';
@@ -15,8 +16,14 @@ SpecDocument _makeDoc({Map<String, SchemaObject> schemas = const {}}) =>
       securitySchemes: const {},
     );
 
-ModelGenerator _makeGen(SpecDocument doc) =>
-    ModelGenerator(buildNameRegistry(doc), DateTimeConverter.iso8601);
+ModelGenerator _makeGen(SpecDocument doc) {
+  final registry = buildNameRegistry(doc);
+  return ModelGenerator(
+    registry,
+    ModelLayout.build(doc, registry),
+    DateTimeConverter.iso8601,
+  );
+}
 
 String _source(SpecDocument doc, String filename) {
   final gen = _makeGen(doc);
@@ -24,6 +31,90 @@ String _source(SpecDocument doc, String filename) {
   return result[filename] ??
       (throw StateError('File not found: $filename. Got: ${result.keys}'));
 }
+
+// --- oneOf fixtures -------------------------------------------------------
+
+const _radius = SchemaProperty(
+  specName: 'radius',
+  schema: PrimitiveSchema(primitiveType: 'number'),
+  isRequired: true,
+);
+const _side = SchemaProperty(
+  specName: 'side',
+  schema: PrimitiveSchema(primitiveType: 'number'),
+  isRequired: true,
+);
+
+const _circle = ObjectSchema(
+  name: 'Circle',
+  properties: [_radius],
+  required: ['radius'],
+);
+const _square = ObjectSchema(
+  name: 'Square',
+  properties: [_side],
+  required: ['side'],
+);
+const _shape = OneOfSchema(
+  name: 'Shape',
+  variants: [_circle, _square],
+  discriminatorPropertyName: 'type',
+);
+
+const _point = ObjectSchema(name: 'Point', properties: [], required: []);
+const _paged = ObjectSchema(name: 'Paged', properties: [], required: []);
+
+const _id = SchemaProperty(
+  specName: 'id',
+  schema: PrimitiveSchema(primitiveType: 'string'),
+  isRequired: true,
+);
+const _license = SchemaProperty(
+  specName: 'license',
+  schema: PrimitiveSchema(primitiveType: 'string'),
+  isRequired: true,
+);
+
+const _customer = ObjectSchema(
+  name: 'Customer',
+  properties: [_id],
+  required: ['id'],
+);
+const _driver = ObjectSchema(
+  name: 'Driver',
+  properties: [_id, _license],
+  required: ['id', 'license'],
+);
+
+/// The spec from the bug report: Customer and Driver are branches of BOTH the
+/// request and the response union of one endpoint, and Agency references
+/// Customer the ordinary way.
+final _reproDoc = _makeDoc(
+  schemas: {
+    'Agency': const ObjectSchema(
+      name: 'Agency',
+      properties: [
+        _id,
+        SchemaProperty(
+          specName: 'customer',
+          schema: _customer,
+          isRequired: true,
+        ),
+      ],
+      required: ['id', 'customer'],
+    ),
+    'Customer': _customer,
+    'Driver': _driver,
+    'RegisterRequest': const OneOfSchema(
+      name: 'RegisterRequest',
+      variants: [_customer, _driver],
+    ),
+    'RegisterResponse': const OneOfSchema(
+      name: 'RegisterResponse',
+      variants: [_customer, _driver],
+    ),
+  },
+);
 
 void main() {
   group('ModelGenerator — file header and alphabetical ordering', () {
@@ -493,71 +584,206 @@ void main() {
   });
 
   group('ModelGenerator — oneOf sealed class', () {
-    test('oneOf → sealed parent class + subclass per variant in same file', () {
-      // All referenced names must be in the registry
+    test(r'discriminated oneOf reuses its $ref branches via implements', () {
+      final doc = _makeDoc(
+        schemas: {'Circle': _circle, 'Shape': _shape, 'Square': _square},
+      );
+      final src = _source(doc, 'models/shape.dart');
+
+      expect(src, contains('sealed class Shape'));
+      expect(src, contains('factory Shape.fromJson'));
+      // The components stay components: they are declared once, in the
+      // wrapper's library, and wired with implements — never re-declared as
+      // private subtypes of the wrapper.
+      expect(src, contains('final class Circle implements Shape'));
+      expect(src, contains('final class Square implements Shape'));
+      expect(src, isNot(contains('extends Shape')));
+      expect(src, contains('throw ArgumentError'));
+      expect(src, contains('final double radius;'));
+      expect(src, contains('final double side;'));
+    });
+
+    test(
+      'a component used by two unions is declared once, implementing both',
+      () {
+        // Regression: request and response of the same endpoint both listing the
+        // same $ref branches used to emit Customer twice, in two files, with two
+        // different supertypes — an ambiguous_export on the barrel.
+        final files = _makeGen(_reproDoc).generate(_reproDoc);
+        final all = files.values.join('\n');
+
+        expect(
+          RegExp(r'final class Customer\b').allMatches(all).length,
+          1,
+          reason: 'Customer must be declared exactly once across all files',
+        );
+        expect(
+          all,
+          contains(
+            'final class Customer implements RegisterRequest, RegisterResponse',
+          ),
+        );
+        expect(files.keys, contains('models/register_request.dart'));
+        expect(
+          files['models/register_request.dart'],
+          contains('sealed class RegisterRequest'),
+        );
+        expect(
+          files['models/register_request.dart'],
+          contains('sealed class RegisterResponse'),
+        );
+      },
+    );
+
+    test(
+      'a schema referencing a clustered component imports the cluster file',
+      () {
+        // Regression: agency.dart used to import customer.dart, a file the
+        // generator never wrote.
+        final files = _makeGen(_reproDoc).generate(_reproDoc);
+        final agency = files['models/agency.dart']!;
+
+        expect(agency, contains("import 'register_request.dart';"));
+        expect(agency, isNot(contains("import 'customer.dart';")));
+        expect(agency, contains('final Customer customer;'));
+        expect(files.keys, isNot(contains('models/customer.dart')));
+      },
+    );
+
+    test('oneOf without discriminator decodes by trying the variants', () {
+      final files = _makeGen(_reproDoc).generate(_reproDoc);
+      final src = files['models/register_request.dart']!;
+
+      expect(src, contains('return Customer.fromJson(json)'));
+      expect(src, contains('return Driver.fromJson(json)'));
+      expect(src, contains('catch (_) {}'));
+      expect(src, contains("no variant matched the payload"));
+      expect(src, isNot(contains('UnimplementedError')));
+    });
+
+    test('variants are tried most-specific first', () {
+      // Customer{id} is a subset of Driver{id, license}: trying Customer first
+      // would swallow every Driver payload.
+      final src =
+          _makeGen(
+            _reproDoc,
+          ).generate(_reproDoc)['models/register_request.dart']!;
+      final body = src.substring(
+        src.indexOf('factory RegisterRequest.fromJson'),
+      );
+      expect(
+        body.indexOf('Driver.fromJson'),
+        lessThan(body.indexOf('Customer.fromJson')),
+      );
+    });
+
+    test(
+      'a non-object branch becomes a value class and widens the signatures',
+      () {
+        final doc = _makeDoc(
+          schemas: {
+            'Point': _point,
+            'Paged': _paged,
+            'PointsResponse': const OneOfSchema(
+              name: 'PointsResponse',
+              variants: [
+                ObjectSchema(name: 'Paged', properties: [], required: []),
+                ArraySchema(
+                  items: ObjectSchema(
+                    name: 'Point',
+                    properties: [],
+                    required: [],
+                  ),
+                ),
+              ],
+            ),
+          },
+        );
+        final src = _source(doc, 'models/points_response.dart');
+
+        expect(src, contains('sealed class PointsResponse'));
+        expect(src, contains('Object? toJson();'));
+        expect(src, contains('factory PointsResponse.fromJson(Object? json)'));
+        expect(
+          src,
+          contains(
+            'final class PointsResponsePointList extends PointsResponse',
+          ),
+        );
+        expect(src, contains('final List<Point> value;'));
+        expect(src, contains('final class Paged implements PointsResponse'));
+      },
+    );
+
+    test('an anonymous inline branch is still emitted as a subclass', () {
       final doc = _makeDoc(
         schemas: {
-          'Circle': const ObjectSchema(
-            name: 'Circle',
-            properties: [
-              SchemaProperty(
-                specName: 'radius',
-                schema: PrimitiveSchema(primitiveType: 'number'),
-                isRequired: true,
-              ),
-            ],
-            required: ['radius'],
-          ),
-          'Shape': const OneOfSchema(
-            name: 'Shape',
+          'Thing': const OneOfSchema(
+            name: 'Thing',
             variants: [
               ObjectSchema(
-                name: 'Circle',
                 properties: [
                   SchemaProperty(
-                    specName: 'radius',
-                    schema: PrimitiveSchema(primitiveType: 'number'),
+                    specName: 'a',
+                    schema: PrimitiveSchema(primitiveType: 'string'),
                     isRequired: true,
                   ),
                 ],
-                required: ['radius'],
-              ),
-              ObjectSchema(
-                name: 'Square',
-                properties: [
-                  SchemaProperty(
-                    specName: 'side',
-                    schema: PrimitiveSchema(primitiveType: 'number'),
-                    isRequired: true,
-                  ),
-                ],
-                required: ['side'],
+                required: ['a'],
               ),
             ],
-            discriminatorPropertyName: 'type',
-          ),
-          'Square': const ObjectSchema(
-            name: 'Square',
-            properties: [
-              SchemaProperty(
-                specName: 'side',
-                schema: PrimitiveSchema(primitiveType: 'number'),
-                isRequired: true,
-              ),
-            ],
-            required: ['side'],
           ),
         },
       );
-      final src = _source(doc, 'models/shape.dart');
-      expect(src, contains('sealed class Shape'));
-      expect(src, contains('factory Shape.fromJson'));
-      expect(src, contains('final class Circle extends Shape'));
-      expect(src, contains('final class Square extends Shape'));
-      expect(src, contains('throw ArgumentError'));
-      // All in same file — both subclasses present
-      expect(src, contains('final double radius;'));
-      expect(src, contains('final double side;'));
+      final src = _source(doc, 'models/thing.dart');
+
+      expect(src, contains('sealed class Thing'));
+      expect(src, contains('final class ThingVariant0 extends Thing'));
+      expect(src, contains('final String a;'));
+    });
+  });
+
+  group('ModelGenerator — output invariants', () {
+    test('every import in a model file resolves to an emitted file', () {
+      // This is the invariant the oneOf bug broke: agency.dart imported a file
+      // that was never written. Cheap to check, catches the whole class.
+      final files = _makeGen(_reproDoc).generate(_reproDoc);
+      final importPattern = RegExp(r"^import '([^:']+)';", multiLine: true);
+
+      for (final entry in files.entries) {
+        for (final match in importPattern.allMatches(entry.value)) {
+          final target = 'models/${match.group(1)}';
+          expect(
+            files.keys,
+            contains(target),
+            reason:
+                '${entry.key} imports ${match.group(1)}, which was never emitted',
+          );
+        }
+      }
+    });
+
+    test('no class name is declared in two files', () {
+      // Two declarations of the same name means ambiguous_export on the barrel.
+      final files = _makeGen(_reproDoc).generate(_reproDoc);
+      final declPattern = RegExp(
+        r'^(?:sealed |final |abstract )*(?:class|enum) (\w+)',
+        multiLine: true,
+      );
+      final owner = <String, String>{};
+
+      for (final entry in files.entries) {
+        for (final match in declPattern.allMatches(entry.value)) {
+          final name = match.group(1)!;
+          if (name.startsWith('_')) continue;
+          expect(
+            owner,
+            isNot(contains(name)),
+            reason: '$name is declared in both ${owner[name]} and ${entry.key}',
+          );
+          owner[name] = entry.key;
+        }
+      }
     });
   });
 
@@ -686,7 +912,7 @@ void main() {
   });
 
   group('ModelGenerator — hashCode with >20 fields', () {
-    SchemaProperty _strProp(String name) => SchemaProperty(
+    SchemaProperty strProp(String name) => SchemaProperty(
       specName: name,
       schema: const PrimitiveSchema(primitiveType: 'string'),
       isRequired: true,
@@ -695,7 +921,7 @@ void main() {
     test(
       'class with 21 string fields → hashCode uses Object.hashAll, not Object.hash',
       () {
-        final props = List.generate(21, (i) => _strProp('field$i'));
+        final props = List.generate(21, (i) => strProp('field$i'));
         final doc = _makeDoc(
           schemas: {
             'BigDto': ObjectSchema(
@@ -714,7 +940,7 @@ void main() {
     test(
       'class with 20 string fields → hashCode uses Object.hash (not Object.hashAll)',
       () {
-        final props = List.generate(20, (i) => _strProp('field$i'));
+        final props = List.generate(20, (i) => strProp('field$i'));
         final doc = _makeDoc(
           schemas: {
             'MedDto': ObjectSchema(
@@ -728,5 +954,124 @@ void main() {
         expect(src, contains('Object.hash('));
       },
     );
+  });
+
+  group('ModelGenerator — oneOf branch classification', () {
+    test(
+      'a synthesised value class yields to a real component of the same name',
+      () {
+        // FooString is a component the user owns; the value holder for the
+        // string branch of Foo would be called FooString too. Declaring the
+        // name twice is exactly the ambiguous_export the clustering fixes.
+        final doc = _makeDoc(
+          schemas: {
+            'FooString': const ObjectSchema(
+              name: 'FooString',
+              properties: [_id],
+              required: ['id'],
+            ),
+            'Foo': const OneOfSchema(
+              name: 'Foo',
+              variants: [PrimitiveSchema(primitiveType: 'string')],
+            ),
+          },
+        );
+
+        final files = _makeGen(doc).generate(doc);
+        final declPattern = RegExp(
+          r'^(?:sealed |final |abstract )*(?:class|enum) (\w+)',
+          multiLine: true,
+        );
+        final owner = <String, String>{};
+        for (final entry in files.entries) {
+          for (final match in declPattern.allMatches(entry.value)) {
+            final name = match.group(1)!;
+            if (name.startsWith('_')) continue;
+            expect(
+              owner,
+              isNot(contains(name)),
+              reason: '$name declared in both ${owner[name]} and ${entry.key}',
+            );
+            owner[name] = entry.key;
+          }
+        }
+        // The user's component keeps its name; the synthesised one gives way.
+        expect(owner['FooString'], 'models/foo_string.dart');
+        expect(owner['FooString2'], 'models/foo.dart');
+      },
+    );
+
+    test(r'an unresolvable $ref branch warns instead of crashing', () {
+      // A $ref that resolved outside #/components/schemas: named and
+      // class-shaped, but there is no component to reuse.
+      final doc = _makeDoc(
+        schemas: {
+          'Thing': const OneOfSchema(
+            name: 'Thing',
+            variants: [
+              ObjectSchema(name: 'Elsewhere', properties: [], required: []),
+              ObjectSchema(name: 'Point', properties: [], required: []),
+            ],
+          ),
+          'Point': _point,
+        },
+      );
+      final warnings = <String>[];
+      final registry = buildNameRegistry(doc);
+      final files = ModelGenerator(
+        registry,
+        ModelLayout.build(doc, registry),
+        DateTimeConverter.iso8601,
+        onWarning: warnings.add,
+      ).generate(doc);
+
+      expect(warnings, isNotEmpty);
+      expect(warnings.join('\n'), contains('Elsewhere'));
+      final src = files['models/thing.dart']!;
+      expect(src, contains('sealed class Thing'));
+      // The resolvable branch is still wired up; the missing one is dropped.
+      expect(src, contains('Point.fromJson'));
+      expect(src, isNot(contains('Elsewhere')));
+    });
+
+    test(r'a nested oneOf $ref branch joins the same cluster', () {
+      final doc = _makeDoc(
+        schemas: {
+          'Leaf': const ObjectSchema(
+            name: 'Leaf',
+            properties: [_id],
+            required: ['id'],
+          ),
+          'Inner': const OneOfSchema(
+            name: 'Inner',
+            variants: [
+              ObjectSchema(name: 'Leaf', properties: [_id], required: ['id']),
+            ],
+          ),
+          'Outer': const OneOfSchema(
+            name: 'Outer',
+            variants: [
+              OneOfSchema(
+                name: 'Inner',
+                variants: [
+                  ObjectSchema(
+                    name: 'Leaf',
+                    properties: [_id],
+                    required: ['id'],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        },
+      );
+      final files = _makeGen(doc).generate(doc);
+
+      expect(files.keys, ['models/inner.dart']);
+      final src = files['models/inner.dart']!;
+      expect(src, contains('sealed class Inner implements Outer'));
+      expect(src, contains('sealed class Outer'));
+      expect(src, contains('final class Leaf implements Inner'));
+    });
   });
 }

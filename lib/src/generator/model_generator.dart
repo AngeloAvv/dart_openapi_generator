@@ -1,11 +1,12 @@
 import 'package:code_builder/code_builder.dart';
 
 import '../date_time_converter.dart';
+import '../layout/model_layout.dart';
+import '../layout/one_of_plan.dart';
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
 import '../name_registry/keyword_escaper.dart';
-import '../name_registry/name_converter.dart';
 import '../name_registry/name_registry.dart';
 import 'code_builder_emitter.dart';
 import 'code_builder_helpers.dart';
@@ -19,7 +20,7 @@ import 'code_builder_helpers.dart';
 ///
 /// Usage:
 /// ```dart
-/// final generator = ModelGenerator(registry, DateTimeConverter.iso8601);
+/// final generator = ModelGenerator(registry, layout, DateTimeConverter.iso8601);
 /// final files = generator.generate(document);
 /// ```
 final class ModelGenerator {
@@ -30,52 +31,68 @@ final class ModelGenerator {
   /// messages. Callers should route this to `log.warning` in the builder context.
   final void Function(String)? onWarning;
 
+  /// Where each schema is declared. Built once per document by the caller,
+  /// like [NameRegistry].
+  final ModelLayout _layout;
+
   const ModelGenerator(
     this._registry,
+    this._layout,
     this._dateTimeConverter, {
     this.onWarning,
   });
 
-  /// Generates one Dart source file per schema in [document].
+  /// Generates one Dart source file per model file in [document].
   ///
-  /// Schemas are processed in alphabetical order.
-  /// Empty results (NullSchema, cyclic sentinels at top level) are filtered.
-  ///
-  /// Schemas that are inline variants of a oneOf sealed class are NOT emitted as
-  /// standalone files — their classes are inlined into the sealed parent file
-  /// (e.g. EmailNotification is emitted inside notification.dart, NOT as a
-  /// separate email_notification.dart). This avoids ambiguous_export errors in
-  /// the barrel when both the parent and variant files would define the same
-  /// class name.
+  /// Most schemas get a file of their own. `oneOf` wrappers and the component
+  /// schemas they reference through `$ref` share a file — see [ModelLayout] —
+  /// because Dart only lets a `sealed` type be implemented from inside its own
+  /// library. Sharing the library is what keeps the wrapper exhaustive while
+  /// the branches stay standalone, reusable classes.
   ///
   /// Returns `Map<String, String>` where keys are `'models/<name>.dart'`
   /// and values are formatted Dart source strings.
   Map<String, String> generate(SpecDocument document) {
-    // Build the set of spec names that are oneOf variants. These schemas will
-    // be emitted inline inside their parent sealed class file and must NOT
-    // receive a standalone file.
-    final variantSpecNames =
-        document.schemas.entries.where((e) => e.value is OneOfSchema).expand((
-          e,
-        ) {
-          final schema = e.value as OneOfSchema;
-          return schema.variants.indexed.map(
-            (iv) => iv.$2.name ?? '${e.key}Variant${iv.$1}',
-          );
-        }).toSet();
-
-    final sortedNames = document.schemas.keys.toList()..sort();
     final result = <String, String>{};
-    for (final specName in sortedNames) {
-      // Skip variant schemas — they are inlined by _emitSealedClass.
-      if (variantSpecNames.contains(specName)) continue;
-      final schema = document.schemas[specName]!;
-      final source = _emitSchema(specName, schema);
-      if (source.isNotEmpty) {
-        final fileName =
-            'models/${toSnakeCase(_registry.dartClassName(specName))}.dart';
-        result[fileName] = source;
+    for (final file in _layout.files) {
+      final body = <Spec>[];
+      final imports = <String>{};
+      var needsUndefined = false;
+      var needsListEquals = false;
+      var needsMapEquals = false;
+
+      for (final specName in _layout.membersOf(file)) {
+        // Non-null: the layout is built from `document.schemas`, so every
+        // member name it lists is a key of that map.
+        final schema = document.schemas[specName]!;
+        final specs = _specsFor(
+          specName,
+          schema,
+          file,
+          _layout.unionsImplementedBy(specName),
+        );
+        body.addAll(specs.body);
+        imports.addAll(specs.imports);
+        needsUndefined = needsUndefined || specs.needsUndefined;
+        needsListEquals = needsListEquals || specs.needsListEquals;
+        needsMapEquals = needsMapEquals || specs.needsMapEquals;
       }
+      if (body.isEmpty) continue;
+
+      result['models/$file'] = emitLibrary(
+        Library((lib) {
+          for (final imp in imports.toList()..sort()) {
+            lib.directives.add(Directive.import(imp));
+          }
+          if (needsUndefined) {
+            lib.body.add(_undefinedSentinelClass);
+            lib.body.add(_undefinedSentinelField);
+          }
+          if (needsListEquals) lib.body.add(_listEqualsMethod());
+          if (needsMapEquals) lib.body.add(_mapEqualsMethod());
+          lib.body.addAll(body);
+        }),
+      );
     }
     return result;
   }
@@ -84,28 +101,48 @@ final class ModelGenerator {
   // Top-level dispatch
   // ---------------------------------------------------------------------------
 
-  String _emitSchema(String specName, SchemaObject schema) {
+  _SchemaSpecs _specsFor(
+    String specName,
+    SchemaObject schema,
+    String selfFile,
+    List<String> implementsClauses,
+  ) {
     // _CyclicRefSchema is private to schema_object.dart; use isCyclicRef() to
     // detect it before entering the switch. A top-level cyclic-ref sentinel
-    // means the schema IS the cycle root — skip file emission but warn the user.
+    // means the schema IS the cycle root — skip emission but warn the user.
     if (isCyclicRef(schema)) {
       final targetName = cyclicRefTargetName(schema);
       onWarning?.call(
         'Cyclic reference detected for type "$targetName" — skipping top-level '
         'file emission for "$specName". The type will be referenced as a late field.',
       );
-      return '';
+      return const _SchemaSpecs();
     }
     return switch (schema) {
-      ObjectSchema() => _emitObjectClass(specName, schema),
-      EnumSchema() => _emitEnum(specName, schema),
-      PrimitiveSchema() => _emitPrimitiveDef(specName, schema),
-      ArraySchema() => _emitArrayDef(specName, schema),
-      AllOfSchema() => _emitAllOfClass(specName, schema),
-      OneOfSchema() => _emitSealedClass(specName, schema),
-      NullSchema() => '', // top-level null schema: skip file emission
+      ObjectSchema() => _objectSpecs(
+        specName,
+        schema,
+        selfFile,
+        implementsClauses: implementsClauses,
+      ),
+      EnumSchema() => _enumSpecs(specName, schema),
+      PrimitiveSchema() => _primitiveSpecs(specName, schema),
+      ArraySchema() => _arraySpecs(specName, schema, selfFile),
+      AllOfSchema() => _allOfSpecs(
+        specName,
+        schema,
+        selfFile,
+        implementsClauses: implementsClauses,
+      ),
+      OneOfSchema() => _oneOfSpecs(
+        specName,
+        schema,
+        selfFile,
+        implementsClauses: implementsClauses,
+      ),
+      NullSchema() => const _SchemaSpecs(), // top-level null schema: skip
       // Unreachable: _CyclicRefSchema is caught above by isCyclicRef() guard.
-      _ => '',
+      _ => const _SchemaSpecs(),
     };
   }
 
@@ -117,23 +154,21 @@ final class ModelGenerator {
   ///
   /// Returns a sorted list of relative import strings of the form
   /// `'<snake_name>.dart'` (relative to the `models/` directory),
-  /// excluding the file for [selfClassName] (to avoid self-imports).
+  /// excluding [selfFile] (to avoid self-imports).
   ///
-  /// [selfClassName] is the PascalCase Dart class name of the file being
-  /// generated (e.g. 'User', 'UserProfile').
+  /// [selfFile] is the file being generated, e.g. `'user.dart'`. Target files
+  /// come from [ModelLayout], never from the class name — a clustered schema
+  /// does not live in the file its own name would suggest.
   List<String> _collectImportsForProps(
-    String selfClassName,
+    String selfFile,
     List<_ResolvedProp> props,
   ) {
     final imports = <String>{};
-    final selfFile = '${toSnakeCase(selfClassName)}.dart';
     for (final p in props) {
       if (p.isCyclic) {
-        // isCyclicTarget is the PascalCase class name of the referenced type.
-        final targetClass = p.isCyclicTarget;
-        if (targetClass != null) {
-          final file = '${toSnakeCase(targetClass)}.dart';
-          if (file != selfFile) imports.add(file);
+        final targetSpecName = p.cyclicTargetSpecName;
+        if (targetSpecName != null) {
+          _addImportForName(selfFile, targetSpecName, imports);
         }
         continue;
       }
@@ -154,40 +189,42 @@ final class ModelGenerator {
     Set<String> imports,
   ) {
     if (isCyclicRef(schema)) {
-      final targetName = cyclicRefTargetName(schema);
-      final targetClass = _registry.dartClassName(targetName);
-      final file = '${toSnakeCase(targetClass)}.dart';
-      if (file != selfFile) imports.add(file);
+      _addImportForName(selfFile, cyclicRefTargetName(schema), imports);
       return;
     }
-    switch (schema) {
-      case EnumSchema() when schema.name != null:
-        final className = _registry.dartClassName(schema.name!);
-        final file = '${toSnakeCase(className)}.dart';
-        if (file != selfFile) imports.add(file);
-      case ObjectSchema() when schema.name != null:
-        final className = _registry.dartClassName(schema.name!);
-        final file = '${toSnakeCase(className)}.dart';
-        if (file != selfFile) imports.add(file);
-      case AllOfSchema() when schema.name != null:
-        final className = _registry.dartClassName(schema.name!);
-        final file = '${toSnakeCase(className)}.dart';
-        if (file != selfFile) imports.add(file);
-      case OneOfSchema() when schema.name != null:
-        final className = _registry.dartClassName(schema.name!);
-        final file = '${toSnakeCase(className)}.dart';
-        if (file != selfFile) imports.add(file);
-      case ArraySchema():
-        _addImportForSchema(selfFile, schema.items, imports);
-      default:
-        break; // primitives and anonymous objects need no import
+    final name = switch (schema) {
+      EnumSchema() ||
+      ObjectSchema() ||
+      AllOfSchema() ||
+      OneOfSchema() => schema.name,
+      _ => null, // primitives and anonymous objects need no import
+    };
+    if (name != null) {
+      _addImportForName(selfFile, name, imports);
+      return;
+    }
+    if (schema is ArraySchema) {
+      _addImportForSchema(selfFile, schema.items, imports);
     }
   }
 
-  String _emitObjectClass(
+  /// Adds the import for the file declaring [specName], unless that file is
+  /// [selfFile] — which is the case for every member of the same cluster.
+  void _addImportForName(
+    String selfFile,
     String specName,
-    ObjectSchema schema, {
+    Set<String> imports,
+  ) {
+    final resolved = _layout.resolveFile(specName);
+    if (resolved != selfFile) imports.add(resolved);
+  }
+
+  _SchemaSpecs _objectSpecs(
+    String specName,
+    ObjectSchema schema,
+    String selfFile, {
     String? extendsClause,
+    List<String> implementsClauses = const [],
   }) {
     final className = _registry.dartClassName(specName);
 
@@ -227,12 +264,13 @@ final class ModelGenerator {
         isMapType: true,
         isCyclic: false,
         isCyclicTarget: null,
+        cyclicTargetSpecName: null,
         isEnumType: false,
         isPrimitive: false,
         isDateTime: false,
         dateTimeIsTimestamp: false,
         isListOfGenerated: false,
-        isMapOfGenerated: false,
+        isMapOfGenerated: apSchema != null && _isGeneratedType(apSchema),
         schema: apSchema,
       );
     }
@@ -243,40 +281,22 @@ final class ModelGenerator {
       if (additionalPropEntry != null) additionalPropEntry,
     ]..sort((a, b) => a.fieldName.compareTo(b.fieldName));
 
-    // Determine const-eligibility
-    final isConstEligible = _isConstEligible(allProps);
-
-    // Determine which helpers are needed
     final needsUndefined = allProps.any((p) => p.isNullable);
-    final needsListEquals = allProps.any((p) => p.isListType);
-    final needsMapEquals = allProps.any((p) => p.isMapType);
 
-    // Collect imports for referenced types.
-    // Pass the PascalCase class name so self-import detection works correctly
-    // (compares file names, not spec names).
-    final imports = _collectImportsForProps(className, allProps);
-
-    return emitLibrary(
-      Library((lib) {
-        for (final imp in imports) {
-          lib.directives.add(Directive.import(imp));
-        }
-        if (needsUndefined) {
-          lib.body.add(_undefinedSentinelClass);
-          lib.body.add(_undefinedSentinelField);
-        }
-        if (needsListEquals) lib.body.add(_listEqualsMethod());
-        if (needsMapEquals) lib.body.add(_mapEqualsMethod());
-        lib.body.add(
-          _buildObjectClass(
-            className: className,
-            props: allProps,
-            isConstEligible: isConstEligible,
-            extendsClause: extendsClause,
-            needsUndefined: needsUndefined,
-          ),
-        );
-      }),
+    return _SchemaSpecs(
+      body: [
+        _buildObjectClass(
+          className: className,
+          props: allProps,
+          isConstEligible: _isConstEligible(allProps),
+          extendsClause: extendsClause,
+          implementsClauses: implementsClauses,
+        ),
+      ],
+      imports: _collectImportsForProps(selfFile, allProps).toSet(),
+      needsUndefined: needsUndefined,
+      needsListEquals: allProps.any((p) => p.isListType),
+      needsMapEquals: allProps.any((p) => p.isMapType),
     );
   }
 
@@ -285,12 +305,15 @@ final class ModelGenerator {
     required List<_ResolvedProp> props,
     required bool isConstEligible,
     String? extendsClause,
-    required bool needsUndefined,
+    List<String> implementsClauses = const [],
   }) {
     return Class((c) {
       c.modifier = ClassModifier.final$;
       c.name = className;
       if (extendsClause != null) c.extend = refer(extendsClause);
+      for (final iface in implementsClauses) {
+        c.implements.add(refer(iface));
+      }
 
       // Fields
       for (final p in props) {
@@ -329,7 +352,13 @@ final class ModelGenerator {
       c.constructors.add(_buildFromJsonConstructor(className, props));
 
       // toJson
-      c.methods.add(_buildToJsonMethod(className, props, extendsClause));
+      c.methods.add(
+        _buildToJsonMethod(
+          className,
+          props,
+          isOverride: extendsClause != null || implementsClauses.isNotEmpty,
+        ),
+      );
 
       // copyWith
       c.methods.add(_buildCopyWithMethod(className, props));
@@ -392,9 +421,9 @@ final class ModelGenerator {
 
   Method _buildToJsonMethod(
     String className,
-    List<_ResolvedProp> props,
-    String? extendsClause,
-  ) {
+    List<_ResolvedProp> props, {
+    required bool isOverride,
+  }) {
     final entryLines = props
         .map((p) {
           if (p.specName == r'$additionalProperties') {
@@ -413,7 +442,7 @@ final class ModelGenerator {
         })
         .join('\n');
     return Method((m) {
-      if (extendsClause != null) m.annotations.add(refer('override'));
+      if (isOverride) m.annotations.add(refer('override'));
       m.name = 'toJson';
       m.returns = refer('Map<String, dynamic>');
       m.lambda = true;
@@ -543,7 +572,7 @@ final class ModelGenerator {
   // EnumSchema emission
   // ---------------------------------------------------------------------------
 
-  String _emitEnum(String specName, EnumSchema schema) {
+  _SchemaSpecs _enumSpecs(String specName, EnumSchema schema) {
     final className = _registry.dartClassName(specName);
 
     // Sanitize and sort enum values alphabetically by Dart identifier
@@ -552,7 +581,9 @@ final class ModelGenerator {
       final wire = wireValue.toString();
       final dart = _sanitizeEnumIdentifier(wire);
       if (dart != wire) {
-        onWarning?.call('Enum value sanitized: "$wire" → "$dart" in $specName');
+        onWarning?.call(
+          'Enum value sanitized: "$wire" \u2192 "$dart" in $specName',
+        );
       }
       entries.add((wire: wire, dart: dart));
     }
@@ -580,63 +611,61 @@ final class ModelGenerator {
       jsonType = 'String';
     }
 
-    return emitLibrary(
-      Library((lib) {
-        lib.body.add(
-          Enum((e) {
-            e.name = className;
-            for (final entry in entries) {
-              e.values.add(EnumValue((v) => v.name = entry.dart));
-            }
-            e.methods.add(
-              Method((m) {
-                m.static = true;
-                m.name = 'fromJson';
-                m.returns = refer(className);
-                m.requiredParameters.add(
-                  Parameter((p) {
-                    p.name = 'v';
-                    p.type = refer(jsonType);
-                  }),
-                );
-                m.lambda = true;
-                m.body =
-                    returnSwitch(
-                      refer('v'),
-                      cases: entries.map(
-                        (entry) => (
-                          _wireToLiteral(entry.wire, jsonType),
-                          refer('$className.${entry.dart}'),
-                        ),
+    return _SchemaSpecs(
+      body: [
+        Enum((e) {
+          e.name = className;
+          for (final entry in entries) {
+            e.values.add(EnumValue((v) => v.name = entry.dart));
+          }
+          e.methods.add(
+            Method((m) {
+              m.static = true;
+              m.name = 'fromJson';
+              m.returns = refer(className);
+              m.requiredParameters.add(
+                Parameter((p) {
+                  p.name = 'v';
+                  p.type = refer(jsonType);
+                }),
+              );
+              m.lambda = true;
+              m.body =
+                  returnSwitch(
+                    refer('v'),
+                    cases: entries.map(
+                      (entry) => (
+                        _wireToLiteral(entry.wire, jsonType),
+                        refer('$className.${entry.dart}'),
                       ),
-                      otherwise: CodeExpression(
-                        Code(
-                          "throw ArgumentError('Unknown $className value: \$v')",
-                        ),
+                    ),
+                    otherwise: CodeExpression(
+                      Code(
+                        "throw ArgumentError('Unknown $className value: \$v')",
                       ),
-                    ).code;
-              }),
-            );
-            e.methods.add(
-              Method((m) {
-                m.name = 'toJson';
-                m.returns = refer(jsonType);
-                m.lambda = true;
-                m.body =
-                    returnSwitch(
-                      refer('this'),
-                      cases: entries.map(
-                        (entry) => (
-                          refer('$className.${entry.dart}'),
-                          _wireToLiteral(entry.wire, jsonType),
-                        ),
+                    ),
+                  ).code;
+            }),
+          );
+          e.methods.add(
+            Method((m) {
+              m.name = 'toJson';
+              m.returns = refer(jsonType);
+              m.lambda = true;
+              m.body =
+                  returnSwitch(
+                    refer('this'),
+                    cases: entries.map(
+                      (entry) => (
+                        refer('$className.${entry.dart}'),
+                        _wireToLiteral(entry.wire, jsonType),
                       ),
-                    ).code;
-              }),
-            );
-          }),
-        );
-      }),
+                    ),
+                  ).code;
+            }),
+          );
+        }),
+      ],
     );
   }
 
@@ -644,18 +673,16 @@ final class ModelGenerator {
   // PrimitiveSchema emission (typedef)
   // ---------------------------------------------------------------------------
 
-  String _emitPrimitiveDef(String specName, PrimitiveSchema schema) {
+  _SchemaSpecs _primitiveSpecs(String specName, PrimitiveSchema schema) {
     final className = _registry.dartClassName(specName);
     final dartType = _primitiveType(schema.primitiveType, schema.format);
-    return emitLibrary(
-      Library((lib) {
-        lib.body.add(
-          TypeDef((t) {
-            t.name = className;
-            t.definition = refer(dartType);
-          }),
-        );
-      }),
+    return _SchemaSpecs(
+      body: [
+        TypeDef((t) {
+          t.name = className;
+          t.definition = refer(dartType);
+        }),
+      ],
     );
   }
 
@@ -663,18 +690,23 @@ final class ModelGenerator {
   // ArraySchema emission (typedef)
   // ---------------------------------------------------------------------------
 
-  String _emitArrayDef(String specName, ArraySchema schema) {
+  _SchemaSpecs _arraySpecs(
+    String specName,
+    ArraySchema schema,
+    String selfFile,
+  ) {
     final className = _registry.dartClassName(specName);
     final itemType = _dartType(specName, schema.items);
-    return emitLibrary(
-      Library((lib) {
-        lib.body.add(
-          TypeDef((t) {
-            t.name = className;
-            t.definition = refer('List<$itemType>');
-          }),
-        );
-      }),
+    final imports = <String>{};
+    _addImportForSchema(selfFile, schema.items, imports);
+    return _SchemaSpecs(
+      body: [
+        TypeDef((t) {
+          t.name = className;
+          t.definition = refer('List<$itemType>');
+        }),
+      ],
+      imports: imports,
     );
   }
 
@@ -682,7 +714,12 @@ final class ModelGenerator {
   // AllOfSchema emission (flat merge)
   // ---------------------------------------------------------------------------
 
-  String _emitAllOfClass(String specName, AllOfSchema schema) {
+  _SchemaSpecs _allOfSpecs(
+    String specName,
+    AllOfSchema schema,
+    String selfFile, {
+    List<String> implementsClauses = const [],
+  }) {
     // Merge all ObjectSchema members
     final mergedProperties =
         <String, SchemaProperty>{}; // specName → first seen
@@ -733,143 +770,329 @@ final class ModelGenerator {
       required: requiredSet.toList(),
     );
 
-    return _emitObjectClass(specName, syntheticSchema);
+    return _objectSpecs(
+      specName,
+      syntheticSchema,
+      selfFile,
+      implementsClauses: implementsClauses,
+    );
   }
 
   // ---------------------------------------------------------------------------
   // OneOfSchema emission (sealed class)
   // ---------------------------------------------------------------------------
 
-  String _emitSealedClass(String specName, OneOfSchema schema) {
+  _SchemaSpecs _oneOfSpecs(
+    String specName,
+    OneOfSchema schema,
+    String selfFile, {
+    List<String> implementsClauses = const [],
+  }) {
     final className = _registry.dartClassName(specName);
+    final imports = <String>{};
+    final body = <Spec>[];
+    var needsUndefined = false;
+    var needsListEquals = false;
+    var needsMapEquals = false;
 
-    // Resolve variants sorted alphabetically by class name
-    final variants = <({String variantSpecName, ObjectSchema variantSchema})>[];
-    for (var i = 0; i < schema.variants.length; i++) {
-      final variant = schema.variants[i];
-      String variantSpecName;
-      if (variant.name != null) {
-        variantSpecName = variant.name!;
-      } else {
-        onWarning?.call(
-          'oneOf variant $i of "$specName" has no name; using index as fallback.',
-        );
-        variantSpecName = '${specName}Variant$i';
-      }
-      if (variant is ObjectSchema) {
-        variants.add((
-          variantSpecName: variantSpecName,
-          variantSchema: variant,
-        ));
-      } else {
-        // Warn about silently skipped non-ObjectSchema variants so the
-        // caller knows the discriminator fromJson will have no arm for them.
-        onWarning?.call(
-          'oneOf variant "$variantSpecName" in "$specName" is not an '
-          'ObjectSchema (type: ${variant.runtimeType}); skipped. The '
-          'discriminator fromJson will not handle this variant.',
-        );
+    // Branches were classified once, for the whole document, by [OneOfPlan]:
+    //  - [ReusedRefBranch]    a $ref to a class-shaped component: reused, and
+    //                         never redeclared here;
+    //  - [InlineObjectBranch] an anonymous inline object: emitted as a
+    //                         subclass in this file;
+    //  - [ValueBranch]        anything else (array, primitive, enum): emitted
+    //                         as a class holding the decoded value, since
+    //                         those types cannot implement the wrapper;
+    //  - [SkippedBranch]      a $ref cycle or an unresolvable target: dropped
+    //                         with an advisory warning.
+    final arms = <_OneOfArm>[];
+    final inlineVariants = <({String specName, ObjectSchema schema})>[];
+    final valueVariants = <({String specName, SchemaObject schema})>[];
+
+    for (final branch in _layout.oneOfPlan.branchesOf(specName)) {
+      switch (branch) {
+        case SkippedBranch():
+          onWarning?.call(branch.reason);
+        case ReusedRefBranch():
+          _addImportForName(selfFile, branch.specName, imports);
+          final shape = _schemaShape(branch.schema);
+          arms.add((
+            specName: branch.specName,
+            className: _registry.dartClassName(branch.specName),
+            isMapShaped: true,
+            requiredCount: shape.required,
+            propertyCount: shape.total,
+          ));
+        case InlineObjectBranch():
+          inlineVariants.add((
+            specName: branch.specName,
+            schema: branch.schema,
+          ));
+          final shape = _schemaShape(branch.schema);
+          arms.add((
+            specName: branch.specName,
+            className: _registry.dartClassName(branch.specName),
+            isMapShaped: true,
+            requiredCount: shape.required,
+            propertyCount: shape.total,
+          ));
+        case ValueBranch():
+          valueVariants.add((specName: branch.specName, schema: branch.schema));
+          arms.add((
+            specName: branch.specName,
+            className: _registry.dartClassName(branch.specName),
+            isMapShaped: false,
+            requiredCount: 0,
+            propertyCount: 0,
+          ));
       }
     }
-    variants.sort(
-      (a, b) => _registry
-          .dartClassName(a.variantSpecName)
-          .compareTo(_registry.dartClassName(b.variantSpecName)),
-    );
 
-    // Build discriminator mapping: wire value → variant spec name
+    if (arms.isEmpty) {
+      onWarning?.call(
+        'oneOf "$specName" has no usable variant; emitting an empty sealed class.',
+      );
+    }
+
+    // A union with a non-object branch cannot promise a JSON object, so its
+    // toJson/fromJson widen to Object?. Unions of objects keep the narrower
+    // Map<String, dynamic> signature.
+    final isPolymorphic = _layout.oneOfPlan.isPolymorphic(specName);
+
+    // Discriminator mapping: wire value → variant spec name.
     final Map<String, String> wireToVariantSpec;
     if (schema.discriminatorMapping != null) {
-      // Keys are wire values, values are schema ref paths
       wireToVariantSpec = {
         for (final e in schema.discriminatorMapping!.entries)
           e.key: e.value.split('/').last,
       };
     } else {
-      // Use variant name as wire value directly
-      wireToVariantSpec = {
-        for (final v in variants) v.variantSpecName: v.variantSpecName,
-      };
+      wireToVariantSpec = {for (final a in arms) a.specName: a.specName};
     }
 
-    // Determine if any variant needs helpers (for top-level helper generation)
-    bool needsUndefined = false;
-    bool needsListEquals = false;
-    bool needsMapEquals = false;
-
-    final variantResolvedProps =
-        <({String variantSpecName, List<_ResolvedProp> props})>[];
-
-    // Collect imports needed by variants (e.g. enum/model refs in variant props)
-    final sealedImports = <String>{};
-    final sealedFileName = '${toSnakeCase(className)}.dart';
-
-    for (final v in variants) {
-      final variantClass = _registry.dartClassName(v.variantSpecName);
-      final props = _resolveProperties(v.variantSpecName, v.variantSchema);
-      variantResolvedProps.add((
-        variantSpecName: v.variantSpecName,
-        props: props,
-      ));
-      if (props.any((p) => p.isNullable)) needsUndefined = true;
-      if (props.any((p) => p.isListType)) needsListEquals = true;
-      if (props.any((p) => p.isMapType)) needsMapEquals = true;
-      // Collect imports for this variant's properties (self = sealed class file)
-      for (final imp in _collectImportsForProps(variantClass, props)) {
-        if (imp != sealedFileName) sealedImports.add(imp);
-      }
-    }
-
-    final sortedSealedImports = sealedImports.toList()..sort();
-
-    // Sealed class body: build fromJson factory and toJson abstract method as Code lines.
-    // code_builder 4.x has no sealed class modifier — use Class.sealed = true instead.
-    final sealedFromJson = _buildSealedFromJson(
-      className,
-      schema.discriminatorPropertyName,
-      wireToVariantSpec,
+    body.add(
+      Class((c) {
+        c.sealed = true;
+        c.name = className;
+        if (schema.discriminatorPropertyName == null && arms.isNotEmpty) {
+          c.docs.addAll([
+            '/// A `oneOf` union with no `discriminator`.',
+            '///',
+            '/// [$className.fromJson] guesses the variant from the shape of the',
+            '/// payload; read its documentation before relying on the result.',
+          ]);
+        }
+        for (final iface in implementsClauses) {
+          c.implements.add(refer(iface));
+        }
+        c.constructors.add(Constructor((ctor) => ctor.constant = true));
+        c.constructors.add(
+          _buildSealedFromJson(
+            specName,
+            className,
+            schema.discriminatorPropertyName,
+            wireToVariantSpec,
+            arms,
+            isPolymorphic: isPolymorphic,
+          ),
+        );
+        c.methods.add(
+          Method((m) {
+            m.name = 'toJson';
+            m.returns = refer(
+              isPolymorphic ? 'Object?' : 'Map<String, dynamic>',
+            );
+            // no body = abstract method
+          }),
+        );
+      }),
     );
-    final sealedClass = Class((c) {
-      c.sealed = true;
+
+    // Inline anonymous variants: full subclasses, as before.
+    final inlineProps = <({String specName, List<_ResolvedProp> props})>[
+      for (final v in inlineVariants)
+        (specName: v.specName, props: _resolveProperties(v.specName, v.schema)),
+    ];
+    for (final v in inlineProps) {
+      if (v.props.any((p) => p.isNullable)) needsUndefined = true;
+      if (v.props.any((p) => p.isListType)) needsListEquals = true;
+      if (v.props.any((p) => p.isMapType)) needsMapEquals = true;
+      imports.addAll(_collectImportsForProps(selfFile, v.props));
+    }
+    for (final v in inlineProps) {
+      body.add(
+        _buildObjectClass(
+          className: _registry.dartClassName(v.specName),
+          props: v.props,
+          isConstEligible: _isConstEligible(v.props),
+          extendsClause: className,
+        ),
+      );
+    }
+
+    // Value-holding variants for branches that cannot implement the wrapper.
+    for (final v in valueVariants) {
+      final valueProp = _resolveValueProp(specName, v.schema);
+      if (valueProp.isListType) needsListEquals = true;
+      _addImportForSchema(selfFile, v.schema, imports);
+      body.add(
+        _buildValueVariantClass(
+          className: _registry.dartClassName(v.specName),
+          wrapperClassName: className,
+          valueProp: valueProp,
+          isPolymorphic: isPolymorphic,
+        ),
+      );
+    }
+
+    return _SchemaSpecs(
+      body: body,
+      imports: imports,
+      needsUndefined: needsUndefined,
+      needsListEquals: needsListEquals,
+      needsMapEquals: needsMapEquals,
+    );
+  }
+
+  /// Number of required and declared properties of a schema, used to order
+  /// the variants a discriminator-less `fromJson` tries.
+  ({int required, int total}) _schemaShape(SchemaObject schema) {
+    if (schema is ObjectSchema) {
+      return (
+        required: schema.required.length,
+        total: schema.properties.length,
+      );
+    }
+    if (schema is AllOfSchema) {
+      var req = 0;
+      var total = 0;
+      for (final member in schema.schemas) {
+        final shape = _schemaShape(member);
+        req += shape.required;
+        total += shape.total;
+      }
+      return (required: req, total: total);
+    }
+    return (required: 0, total: 0);
+  }
+
+  /// Resolves a whole schema as a single `value` field — used by the classes
+  /// that hold a non-object `oneOf` branch.
+  _ResolvedProp _resolveValueProp(String ownerSpecName, SchemaObject schema) {
+    final dartType = _dartType(ownerSpecName, schema);
+    final isListType = dartType.startsWith('List<');
+    return _ResolvedProp(
+      specName: 'value',
+      fieldName: 'value',
+      dartType: dartType,
+      isNullable: false,
+      isRequired: true,
+      isListType: isListType,
+      isMapType: dartType.startsWith('Map<'),
+      isCyclic: false,
+      isCyclicTarget: null,
+      cyclicTargetSpecName: null,
+      isEnumType: schema is EnumSchema,
+      isPrimitive: schema is PrimitiveSchema,
+      isDateTime: schema is PrimitiveSchema && schema.format == 'date-time',
+      dateTimeIsTimestamp:
+          schema is PrimitiveSchema &&
+          schema.format == 'date-time' &&
+          _dateTimeConverter == DateTimeConverter.timestamp,
+      isListOfGenerated:
+          isListType && schema is ArraySchema && _isGeneratedType(schema.items),
+      isMapOfGenerated: false,
+      schema: schema,
+    );
+  }
+
+  Class _buildValueVariantClass({
+    required String className,
+    required String wrapperClassName,
+    required _ResolvedProp valueProp,
+    required bool isPolymorphic,
+  }) {
+    final decode = _fromJsonExpr(valueProp, 'json', nullable: false);
+    final encode = _toJsonExpr(valueProp);
+    return Class((c) {
+      c.modifier = ClassModifier.final$;
       c.name = className;
-      c.constructors.add(Constructor((ctor) => ctor.constant = true));
-      c.constructors.add(sealedFromJson);
+      c.extend = refer(wrapperClassName);
+      c.fields.add(
+        Field((f) {
+          f.modifier = FieldModifier.final$;
+          f.name = 'value';
+          f.type = refer(valueProp.dartType);
+        }),
+      );
+      c.constructors.add(
+        Constructor((ctor) {
+          ctor.constant = true;
+          ctor.requiredParameters.add(
+            Parameter((p) {
+              p.name = 'value';
+              p.toThis = true;
+            }),
+          );
+        }),
+      );
+      c.constructors.add(
+        Constructor((ctor) {
+          ctor.factory = true;
+          ctor.name = 'fromJson';
+          ctor.lambda = true;
+          ctor.requiredParameters.add(
+            Parameter((p) {
+              p.name = 'json';
+              p.type = refer('Object?');
+            }),
+          );
+          ctor.body = Code('$className($decode)');
+        }),
+      );
       c.methods.add(
         Method((m) {
+          m.annotations.add(refer('override'));
           m.name = 'toJson';
-          m.returns = refer('Map<String, dynamic>');
-          // no body = abstract method
+          m.returns = refer(isPolymorphic ? 'Object?' : 'Map<String, dynamic>');
+          m.lambda = true;
+          m.body = Code(encode);
+        }),
+      );
+      c.methods.add(
+        Method((m) {
+          m.annotations.add(refer('override'));
+          m.name = 'operator ==';
+          m.returns = refer('bool');
+          m.requiredParameters.add(
+            Parameter((p) {
+              p.name = 'other';
+              p.type = refer('Object');
+            }),
+          );
+          m.lambda = true;
+          final cmp =
+              valueProp.isListType
+                  ? '_listEquals(value, other.value)'
+                  : 'value == other.value';
+          m.body = Code(
+            'identical(this, other) || other is $className && $cmp',
+          );
+        }),
+      );
+      c.methods.add(
+        Method((m) {
+          m.annotations.add(refer('override'));
+          m.name = 'hashCode';
+          m.type = MethodType.getter;
+          m.returns = refer('int');
+          m.lambda = true;
+          m.body = Code(
+            valueProp.isListType ? 'Object.hashAll(value)' : 'value.hashCode',
+          );
         }),
       );
     });
-
-    return emitLibrary(
-      Library((lib) {
-        for (final imp in sortedSealedImports) {
-          lib.directives.add(Directive.import(imp));
-        }
-        if (needsUndefined) {
-          lib.body.add(_undefinedSentinelClass);
-          lib.body.add(_undefinedSentinelField);
-        }
-        if (needsListEquals) lib.body.add(_listEqualsMethod());
-        if (needsMapEquals) lib.body.add(_mapEqualsMethod());
-        lib.body.add(sealedClass);
-        for (final vr in variantResolvedProps) {
-          final variantClassName = _registry.dartClassName(vr.variantSpecName);
-          final isConstEligible = _isConstEligible(vr.props);
-          lib.body.add(
-            _buildObjectClass(
-              className: variantClassName,
-              props: vr.props,
-              isConstEligible: isConstEligible,
-              extendsClause: className,
-              needsUndefined: needsUndefined,
-            ),
-          );
-        }
-      }),
-    );
   }
 
   // ---------------------------------------------------------------------------
@@ -897,6 +1120,7 @@ final class ModelGenerator {
             isMapType: false,
             isCyclic: true,
             isCyclicTarget: targetClass,
+            cyclicTargetSpecName: targetName,
             isEnumType: false,
             isPrimitive: false,
             isDateTime: false,
@@ -940,6 +1164,7 @@ final class ModelGenerator {
           isMapType: isMapType,
           isCyclic: false,
           isCyclicTarget: null,
+          cyclicTargetSpecName: null,
           isEnumType: isEnumType,
           isPrimitive: isPrimitive,
           isDateTime: isDateTime,
@@ -1310,13 +1535,6 @@ final class ModelGenerator {
   }
 
   // ---------------------------------------------------------------------------
-  // Filename helper
-  // ---------------------------------------------------------------------------
-
-  // [toSnakeCase] from name_converter.dart handles consecutive-capital
-  // sequences (e.g. HTMLParser → html_parser) via a two-pass PascalCase-aware regex.
-
-  // ---------------------------------------------------------------------------
   // Enum wire-value literal helper
   // ---------------------------------------------------------------------------
 
@@ -1344,44 +1562,214 @@ final class ModelGenerator {
   // Sealed class fromJson factory builder
   // ---------------------------------------------------------------------------
 
+  /// Dart class name for a `discriminator.mapping` target that is not itself a
+  /// branch of this `oneOf`.
+  ///
+  /// A mapping pointing at a schema the document never declares is a spec
+  /// error, and has to read as one: without this the lookup would surface the
+  /// registry's internal [StateError] and abort the build with a message about
+  /// the generator's own state instead of the user's spec.
+  String _mappingTargetClassName(
+    String specName,
+    String wireValue,
+    String targetSpecName,
+  ) {
+    try {
+      return _registry.dartClassName(targetSpecName);
+    } on StateError {
+      throw OpenApiParseException(
+        'Discriminator mapping of "$specName" maps "$wireValue" to '
+        '"$targetSpecName", which is not a schema declared in this document. '
+        'Point the mapping at a declared schema or remove the entry.',
+        jsonPointer:
+            '#/components/schemas/$specName/discriminator/mapping/$wireValue',
+      );
+    }
+  }
+
   Constructor _buildSealedFromJson(
+    String specName,
     String className,
     String? discriminatorPropertyName,
     Map<String, String> wireToVariantSpec,
-  ) {
+    List<_OneOfArm> arms, {
+    required bool isPolymorphic,
+  }) {
+    final classNameBySpec = {for (final a in arms) a.specName: a.className};
+    final jsonType = isPolymorphic ? 'Object?' : 'Map<String, dynamic>';
+
     return Constructor((ctor) {
       ctor.factory = true;
       ctor.name = 'fromJson';
-      ctor.lambda = true;
       ctor.requiredParameters.add(
         Parameter((p) {
           p.name = 'json';
-          p.type = refer('Map<String, dynamic>');
+          p.type = refer(jsonType);
         }),
       );
+
       if (discriminatorPropertyName != null) {
         final caseLines = <String>[];
         for (final entry in wireToVariantSpec.entries) {
-          final variantClass = _registry.dartClassName(entry.value);
+          final variantClass =
+              classNameBySpec[entry.value] ??
+              _mappingTargetClassName(specName, entry.key, entry.value);
           caseLines.add("  '${entry.key}' => $variantClass.fromJson(json),");
         }
         caseLines.add(
           "  final t => throw ArgumentError('Unknown $className discriminator value: \$t (key: $discriminatorPropertyName)'),",
         );
-        ctor.lambda = false;
-        ctor.body = Code(
+        final buffer = StringBuffer();
+        if (isPolymorphic) {
+          buffer.writeln(
+            "if (json is! Map<String, dynamic>) {\n"
+            "  throw ArgumentError('Expected a JSON object for $className, got \${json.runtimeType}');\n"
+            "}",
+          );
+        }
+        buffer.writeln(
           "if (!json.containsKey('$discriminatorPropertyName')) {\n"
           "  throw ArgumentError('Missing discriminator key \"$discriminatorPropertyName\" in JSON');\n"
-          "}\n"
+          "}",
+        );
+        buffer.write(
           "return switch (json['$discriminatorPropertyName']!.toString()) {\n${caseLines.join('\n')}\n};",
         );
-      } else {
-        ctor.body = Code(
-          "throw UnimplementedError('$className.fromJson: no discriminator defined')",
-        );
+        ctor.body = Code(buffer.toString());
+        return;
       }
+
+      // No discriminator: try the variants and keep the first that decodes.
+      // Order is by descending specificity — most required properties first,
+      // then most declared properties, then spec order. A payload that
+      // satisfies both a narrow and a wide variant belongs to the wide one:
+      // trying the narrow one first would swallow every superset of it.
+      // See [_sortArmsByShape].
+      final ordered = [...arms];
+      _sortArmsByShape(ordered);
+      // The consumer of the generated client never reads this file, so the
+      // heuristic and its failure mode have to travel with the code.
+      ctor.docs.addAll([
+        '/// Decodes [json] into one of the variants of [$className].',
+        '///',
+        '/// This union declares no `discriminator`, so the variant is inferred',
+        '/// from the payload: each candidate is tried in turn and the first one',
+        '/// that decodes wins. The order is fixed at generation time, from the',
+        '/// most specific shape to the least:',
+        '///',
+        for (var i = 0; i < ordered.length; i++)
+          '/// ${i + 1}. [${ordered[i].className}]',
+        '///',
+        '/// Every error raised while trying a variant is swallowed, including a',
+        '/// genuine failure deep inside a nested `fromJson`. A payload that no',
+        '/// variant accepts surfaces as a [FormatException] here, with no trace',
+        '/// of why each candidate was rejected — and a payload that two variants',
+        '/// both accept is resolved by the order above, not by the server\'s',
+        '/// intent.',
+        '///',
+        '/// Add `discriminator.propertyName` to this schema in the OpenAPI',
+        '/// document to replace the whole heuristic with an exact lookup.',
+      ]);
+      final buffer = StringBuffer();
+      for (final arm in ordered) {
+        if (arm.isMapShaped && isPolymorphic) {
+          buffer.writeln(
+            'if (json is Map<String, dynamic>) {\n'
+            '  try {\n'
+            '    return ${arm.className}.fromJson(json);\n'
+            '  } catch (_) {}\n'
+            '}',
+          );
+        } else {
+          buffer.writeln(
+            'try {\n'
+            '  return ${arm.className}.fromJson(json);\n'
+            '} catch (_) {}',
+          );
+        }
+      }
+      buffer.write(
+        "throw FormatException('$className.fromJson: no variant matched the payload');",
+      );
+      ctor.body = Code(buffer.toString());
     });
   }
+}
+
+/// Sorts [arms] into the order a discriminator-less `fromJson` should try them:
+/// most specific first.
+///
+/// "Specificity" is the shape of the variant's JSON object: first its number of
+/// **required** properties, then its number of declared properties. Value-held
+/// branches (arrays, primitives, enums) count as zero on both and therefore
+/// sort last, which is what we want — they accept the payloads no object
+/// variant claimed.
+///
+/// The order must be **descending** because the generated dispatch keeps the
+/// first variant that decodes without throwing, and a narrow variant accepts
+/// every payload of a wider one: `Customer{id}` ⊂ `Driver{id, license}`, so
+/// trying `Customer` first would swallow every `Driver`. Descending order makes
+/// the wider variant win, which is the only choice that can ever be right when
+/// one variant's required set is a subset of another's.
+///
+/// The tie-break is the arm's original index, i.e. the order the variants are
+/// declared in the spec. It has to be explicit: [List.sort] is not stable, so
+/// without it two same-shaped variants could swap between runs and change the
+/// generated file for an unchanged spec.
+///
+/// Cases that stay ambiguous by design: two variants with the same required
+/// set and the same property count are decided by declaration order alone, and
+/// a payload carrying extra unknown keys still matches whichever variant
+/// tolerates it first. Both are unresolvable from the shape of the schema — the
+/// spec-level fix is `discriminator.propertyName`, and the generated dartdoc
+/// says so.
+void _sortArmsByShape(List<_OneOfArm> arms) {
+  final indexed = [
+    for (var i = 0; i < arms.length; i++) (index: i, arm: arms[i]),
+  ];
+  indexed.sort((a, b) {
+    final byRequired = b.arm.requiredCount.compareTo(a.arm.requiredCount);
+    if (byRequired != 0) return byRequired;
+    final byTotal = b.arm.propertyCount.compareTo(a.arm.propertyCount);
+    if (byTotal != 0) return byTotal;
+    return a.index.compareTo(b.index);
+  });
+  for (var i = 0; i < arms.length; i++) {
+    arms[i] = indexed[i].arm;
+  }
+}
+
+/// One branch of a `oneOf`, as seen by the generated `fromJson` dispatch.
+///
+/// [isMapShaped] is false for branches held by a generated value class
+/// (arrays, primitives, enums) — those decode from a non-object payload.
+typedef _OneOfArm =
+    ({
+      String specName,
+      String className,
+      bool isMapShaped,
+      int requiredCount,
+      int propertyCount,
+    });
+
+/// Everything one schema contributes to the file it is emitted in.
+///
+/// A file may hold several schemas (a `oneOf` cluster), so the top-level
+/// helpers are requested here and emitted once per file by [ModelGenerator].
+final class _SchemaSpecs {
+  final List<Spec> body;
+  final Set<String> imports;
+  final bool needsUndefined;
+  final bool needsListEquals;
+  final bool needsMapEquals;
+
+  const _SchemaSpecs({
+    this.body = const [],
+    this.imports = const {},
+    this.needsUndefined = false,
+    this.needsListEquals = false,
+    this.needsMapEquals = false,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1507,6 +1895,9 @@ final class _ResolvedProp {
   final bool isMapType;
   final bool isCyclic;
   final String? isCyclicTarget;
+
+  /// Spec name (not Dart class name) of a cyclic target, for [ModelLayout].
+  final String? cyclicTargetSpecName;
   final bool isEnumType;
   final bool isPrimitive;
   final bool isDateTime;
@@ -1525,6 +1916,7 @@ final class _ResolvedProp {
     required this.isMapType,
     required this.isCyclic,
     required this.isCyclicTarget,
+    required this.cyclicTargetSpecName,
     required this.isEnumType,
     required this.isPrimitive,
     required this.isDateTime,

@@ -5,6 +5,24 @@ All notable changes to `dart_openapi_generator` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-18
+
+### Fixed
+
+- **`oneOf` branches that are `$ref`s to component schemas are no longer stolen from the rest of the spec.** A `oneOf` variant was assumed to be a type dedicated to that one union, so every variant was emitted *inside* the wrapper's file and skipped in the standalone-file loop. For a `$ref` branch that assumption is wrong: `#/components/schemas/Customer` is a shared component, and other schemas reference it. The result was that `models/customer.dart` was never written while every model with a `$ref: Customer` property still imported it (`uri_does_not_exist`, `undefined_class`), and that a component used by two unions — the request and the response of one endpoint, typically — was emitted twice with two different supertypes (`ambiguous_export` on the barrel). A component is now emitted exactly once and reused: the reproduction from the bug report goes from 5 analysis errors to none.
+- **Anonymous `oneOf` branches no longer crash the generator.** An inline (non-`$ref`) variant was looked up in the name registry under a synthesised name that was never registered, throwing `StateError`. Those names are registered now, which also gives them the usual duplicate-name detection.
+- **Top-level `typedef Name = List<Item>;` schemas now import their item type.** The alias was emitted without the import it needs.
+
+### Changed (breaking)
+
+- **A `oneOf` wrapper and its `$ref` branches are emitted into the same file, and the branches `implements` the wrapper instead of extending it.** Dart only allows a `sealed` type to be implemented from within its own library, and a `sealed` wrapper is what makes `switch` exhaustiveness work. Keeping both properties — reusable standalone branches *and* an exhaustive union — requires them to share a library. Two unions that share a branch are therefore emitted together. Consequences for existing code: pattern matching (`case Circle c:`) is unaffected, but a class that used to `extend` its wrapper now implements it, and models move between files. **Class names never change**, so import the generated barrel (`generated.dart`) rather than individual model files; the internal file layout is a function of the spec's `oneOf` graph and is not part of the public contract.
+- **`oneOf` without a `discriminator` now decodes instead of throwing.** `fromJson` used to throw `UnimplementedError` unconditionally, which made those endpoints undecodable. It now tries the variants and returns the first that decodes, ordered most-specific-first — by number of required properties, then declared properties, then spec order. That order matters: `Customer{id}` is a subset of `Driver{id, license}`, and trying the narrow variant first would swallow every payload of the wide one. Two variants that accept the same payload remain genuinely ambiguous — add a `discriminator.propertyName` to decide explicitly.
+
+### Added
+
+- **`oneOf` branches that are not objects are supported.** Array, primitive and enum branches used to be dropped with a warning, leaving the union without a case for them. They are now emitted as a generated class holding the decoded `value` (e.g. `final class GetPointsResponsePointList extends GetPointsResponse { final List<Point> value; }`). A union with such a branch cannot promise a JSON object, so its `toJson`/`fromJson` widen to `Object?` and the service call site stops typing the Dio response — unions of objects keep the narrower `Map<String, dynamic>` signature and are unchanged.
+- **A single-branch `oneOf` written inline is collapsed to its branch.** `{ oneOf: [ { type: string } ] }` on a path parameter is a `String`; it no longer produces a `sealed` wrapper with one case. A *named* single-branch `oneOf` is left alone — collapsing it would make the component disappear.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added

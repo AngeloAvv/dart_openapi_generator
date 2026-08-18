@@ -35,6 +35,61 @@ void main() {
       });
     });
 
+    group('OneOfSchema', () {
+      test('multi-branch oneOf → OneOfSchema', () {
+        final result = _makeParser().parse({
+          'oneOf': [
+            {'type': 'string'},
+            {'type': 'integer'},
+          ],
+        }, '#');
+        expect(result, isA<OneOfSchema>());
+      });
+
+      test('single-branch inline oneOf collapses to the branch', () {
+        // A path parameter declared as oneOf: [{type: string}] is a String —
+        // wrapping it in a sealed class with one case helps nobody.
+        final result = _makeParser().parse({
+          'oneOf': [
+            {'type': 'string'},
+          ],
+        }, '#');
+        expect(result, isA<PrimitiveSchema>());
+        expect((result as PrimitiveSchema).primitiveType, 'string');
+      });
+
+      test('single-branch named oneOf is preserved', () {
+        // Collapsing '#/components/schemas/Foo: {oneOf: [Bar]}' would make the
+        // Foo component disappear from the generated API.
+        final result = _makeParser().parseWithName(
+          {
+            'oneOf': [
+              {'type': 'object', 'properties': <String, dynamic>{}},
+            ],
+          },
+          '#',
+          'Foo',
+        );
+        expect(result, isA<OneOfSchema>());
+        expect(result.name, 'Foo');
+      });
+
+      test('single-branch oneOf with a discriminator is preserved', () {
+        final result = _makeParser().parse({
+          'oneOf': [
+            {
+              'type': 'object',
+              'properties': {
+                'kind': {'type': 'string'},
+              },
+            },
+          ],
+          'discriminator': {'propertyName': 'kind'},
+        }, '#');
+        expect(result, isA<OneOfSchema>());
+      });
+    });
+
     group('EnumSchema (PARSE-05)', () {
       test('enum key → EnumSchema', () {
         final result = _makeParser().parse({

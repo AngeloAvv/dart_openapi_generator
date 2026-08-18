@@ -1,3 +1,4 @@
+import '../layout/one_of_plan.dart';
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
@@ -66,7 +67,12 @@ final class NameRegistry {
 ///     - Detect duplicates across all generated class names.
 ///
 /// Throws [OpenApiParseException] if duplicate generated names are detected.
-NameRegistry buildNameRegistry(SpecDocument document) {
+///
+/// [oneOfPlan] is the document's `oneOf` classification. Pass the instance
+/// shared with [ModelLayout] so the whole pipeline agrees on the synthesised
+/// branch names; when omitted it is built here from [document].
+NameRegistry buildNameRegistry(SpecDocument document, {OneOfPlan? oneOfPlan}) {
+  final plan = oneOfPlan ?? OneOfPlan.build(document);
   // --- Pass 1: Collect ---
   // Map from spec name → first-seen spec location (for duplicate error messages)
   final classSpecNames = <String, String>{}; // specName → source description
@@ -125,6 +131,19 @@ NameRegistry buildNameRegistry(SpecDocument document) {
         );
       }
     }
+  }
+
+  // Collect class names for oneOf branches that are not reusable components:
+  // anonymous inline objects, and value-holding wrappers for array/primitive/
+  // enum branches.
+  //
+  // These names are synthesised by [OneOfPlan], which already disambiguated
+  // them against every schema key in the document (`FooString` → `FooString2`
+  // when the user owns a `FooString` component). A plain assignment is
+  // therefore safe: no key here can shadow one collected above, and using
+  // `putIfAbsent` would only hide a collision from the pass-2 detector.
+  for (final entry in plan.synthesizedSpecNames.entries) {
+    classSpecNames[entry.key] = entry.value;
   }
 
   // Collect property names per schema

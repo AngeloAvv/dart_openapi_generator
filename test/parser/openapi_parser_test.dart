@@ -1,5 +1,6 @@
 import 'package:dart_openapi_generator/src/date_time_converter.dart';
 import 'package:dart_openapi_generator/src/generator/model_generator.dart';
+import 'package:dart_openapi_generator/src/layout/model_layout.dart';
 import 'package:dart_openapi_generator/src/model/schema_object.dart';
 import 'package:dart_openapi_generator/src/name_registry/name_registry.dart';
 import 'package:dart_openapi_generator/src/parser/openapi_parser.dart';
@@ -76,6 +77,7 @@ void main() {
 
       final modelFiles = ModelGenerator(
         registry,
+        ModelLayout.build(document, registry),
         DateTimeConverter.iso8601,
       ).generate(document);
       expect(modelFiles.keys, contains('models/create_widget_request.dart'));

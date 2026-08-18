@@ -194,7 +194,7 @@ final class SchemaParser {
     );
   }
 
-  OneOfSchema _parseOneOf(
+  SchemaObject _parseOneOf(
     Map<String, dynamic> raw,
     String pointer,
     String? name,
@@ -217,6 +217,14 @@ final class SchemaParser {
           null,
         ),
       );
+    }
+
+    // A single-branch oneOf in an inline position (a parameter, a body) is just
+    // that branch with extra ceremony: collapse it instead of generating a
+    // sealed wrapper with one case. Named schemas are left alone — collapsing
+    // '#/components/schemas/Foo: {oneOf: [Bar]}' would make Foo disappear.
+    if (variants.length == 1 && name == null && raw['discriminator'] == null) {
+      return variants.first;
     }
 
     // Discriminator (optional)
