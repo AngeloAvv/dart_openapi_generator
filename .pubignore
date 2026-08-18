@@ -1,0 +1,28 @@
+# Files excluded from the published package archive.
+#
+# NOTE: .pubignore REPLACES .gitignore for pub — it does not extend it. Every
+# rule that matters for the archive has to be repeated here, otherwise local
+# artifacts would be published from a working copy.
+
+# docs.page sources. The service reads them from the Git repository, not from
+# the pub archive, and pub's layout convention reserves the singular "doc/" for
+# a top-level documentation directory — a plural "docs/" in the archive fails
+# `dart pub publish --dry-run` with a warning. Keeping them out of the archive
+# satisfies both, and pub.dev does not render .mdx anyway.
+docs/
+docs.json
+
+# Mirrors .gitignore
+.dart_tool/
+.packages
+build/
+*.g.dart
+*.openapi_generator.g.dart
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+.planning/
+.claude/
+CLAUDE.md
