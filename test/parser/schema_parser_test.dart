@@ -106,6 +106,30 @@ void main() {
         );
       });
 
+      test('collapse carries the wrapper description onto a nested oneOf', () {
+        // The only branch is itself an inline union: collapsing must keep its
+        // variants and hand it the wrapper description.
+        final result = _makeParser().parse({
+          'description': 'the wrapper description',
+          'oneOf': [
+            {
+              'oneOf': [
+                {'type': 'string'},
+                {'type': 'integer'},
+              ],
+            },
+          ],
+        }, '#');
+        expect(result, isA<OneOfSchema>());
+        final union = result as OneOfSchema;
+        expect(union.description, 'the wrapper description');
+        expect(union.variants, hasLength(2));
+        expect(
+          union.variants.map((v) => (v as PrimitiveSchema).primitiveType),
+          ['string', 'integer'],
+        );
+      });
+
       test(r'collapse does not overwrite the description of a $ref branch', () {
         final result = _makeParser({
           'components': {

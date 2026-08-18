@@ -2028,5 +2028,40 @@ void main() {
         expect(src, contains('<List<dynamic>>'));
       },
     );
+
+    SpecDocument buildBareDoc() => _makeDocWithSchemas(
+      schemas: const {
+        'Customer': ObjectSchema(
+          name: 'Customer',
+          properties: [],
+          required: [],
+        ),
+        'Payload': payload,
+      },
+      operations: [
+        const OperationItem(
+          path: '/payloads/{id}',
+          method: 'get',
+          operationId: 'getPayload',
+          tags: ['payload'],
+          parameters: [],
+          responses: {
+            '200': ResponseObject(statusCode: '200', jsonSchema: payload),
+          },
+          security: [],
+          additionalMethods: [],
+        ),
+      ],
+    );
+
+    test('bare polymorphic union → Dio call is dynamic and decode has no '
+        'map cast', () {
+      // The union can decode a String as well as a Customer, so the response
+      // body is not necessarily a JSON object.
+      final src = _source(buildBareDoc(), 'services/payload_api.dart');
+      expect(src, contains('_dio.get<dynamic>('));
+      expect(src, contains('Payload.fromJson(data)'));
+      expect(src, isNot(contains('as Map<String, dynamic>')));
+    });
   });
 }

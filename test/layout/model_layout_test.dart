@@ -200,6 +200,55 @@ void main() {
       expect(layout.oneOfPlan.isPolymorphic('Mixed'), isTrue);
     });
 
+    test('one plan shared by the registry and the layout gives the same '
+        'layout', () {
+      // OpenApiBuilder builds a single OneOfPlan and passes it to both
+      // buildNameRegistry and ModelLayout.build; the helper above lets each
+      // rebuild its own. Both wirings must agree.
+      final doc = _doc({
+        'Customer': _obj('Customer'),
+        'Driver': _obj('Driver'),
+        'RegisterRequest': _oneOf('RegisterRequest', [
+          _obj('Customer'),
+          _obj('Driver'),
+        ]),
+        'Mixed': _oneOf('Mixed', [
+          _obj('Customer'),
+          const PrimitiveSchema(primitiveType: 'string'),
+        ]),
+      });
+
+      final plan = OneOfPlan.build(doc);
+      final shared = ModelLayout.build(
+        doc,
+        buildNameRegistry(doc, oneOfPlan: plan),
+        oneOfPlan: plan,
+      );
+      final unshared = _layout(doc);
+
+      expect(identical(shared.oneOfPlan, plan), isTrue);
+      expect(shared.files, unshared.files);
+      for (final name in doc.schemas.keys) {
+        expect(
+          shared.fileFor(name),
+          unshared.fileFor(name),
+          reason: '$name lands in a different file when the plan is shared',
+        );
+        expect(
+          shared.isPolymorphicUnion(name),
+          unshared.isPolymorphicUnion(name),
+        );
+        expect(
+          shared.unionsImplementedBy(name),
+          unshared.unionsImplementedBy(name),
+        );
+      }
+      for (final file in shared.files) {
+        expect(shared.membersOf(file), unshared.membersOf(file));
+        expect(shared.wrappersOf(file), unshared.wrappersOf(file));
+      }
+    });
+
     test(r'a $ref branch outside components/schemas is skipped, not fatal', () {
       final doc = _doc({
         'Thing': _oneOf('Thing', [_obj('Elsewhere')]),

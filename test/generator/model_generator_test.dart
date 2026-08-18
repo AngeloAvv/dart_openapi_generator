@@ -32,6 +32,32 @@ String _source(SpecDocument doc, String filename) {
       (throw StateError('File not found: $filename. Got: ${result.keys}'));
 }
 
+/// Maps every public declaration in [files] to the file declaring it.
+///
+/// Fails as soon as a name is declared twice: two declarations of the same
+/// name mean ambiguous_export on the barrel.
+Map<String, String> _declarationOwners(Map<String, String> files) {
+  final declPattern = RegExp(
+    r'^(?:sealed |final |abstract )*(?:class|enum) (\w+)',
+    multiLine: true,
+  );
+  final owner = <String, String>{};
+
+  for (final entry in files.entries) {
+    for (final match in declPattern.allMatches(entry.value)) {
+      final name = match.group(1)!;
+      if (name.startsWith('_')) continue;
+      expect(
+        owner,
+        isNot(contains(name)),
+        reason: '$name is declared in both ${owner[name]} and ${entry.key}',
+      );
+      owner[name] = entry.key;
+    }
+  }
+  return owner;
+}
+
 // --- oneOf fixtures -------------------------------------------------------
 
 const _radius = SchemaProperty(
@@ -668,9 +694,14 @@ void main() {
           _makeGen(
             _reproDoc,
           ).generate(_reproDoc)['models/register_request.dart']!;
-      final body = src.substring(
-        src.indexOf('factory RegisterRequest.fromJson'),
-      );
+      // The file also declares RegisterResponse.fromJson: scope the body to
+      // the closing brace of the factory under test, or the ordering could be
+      // asserted on the wrong one.
+      final start = src.indexOf('factory RegisterRequest.fromJson');
+      final end = src.indexOf('\n  }\n', start);
+      expect(start, isNonNegative);
+      expect(end, greaterThan(start));
+      final body = src.substring(start, end);
       expect(
         body.indexOf('Driver.fromJson'),
         lessThan(body.indexOf('Customer.fromJson')),
@@ -765,25 +796,7 @@ void main() {
 
     test('no class name is declared in two files', () {
       // Two declarations of the same name means ambiguous_export on the barrel.
-      final files = _makeGen(_reproDoc).generate(_reproDoc);
-      final declPattern = RegExp(
-        r'^(?:sealed |final |abstract )*(?:class|enum) (\w+)',
-        multiLine: true,
-      );
-      final owner = <String, String>{};
-
-      for (final entry in files.entries) {
-        for (final match in declPattern.allMatches(entry.value)) {
-          final name = match.group(1)!;
-          if (name.startsWith('_')) continue;
-          expect(
-            owner,
-            isNot(contains(name)),
-            reason: '$name is declared in both ${owner[name]} and ${entry.key}',
-          );
-          owner[name] = entry.key;
-        }
-      }
+      _declarationOwners(_makeGen(_reproDoc).generate(_reproDoc));
     });
   });
 
@@ -977,24 +990,7 @@ void main() {
           },
         );
 
-        final files = _makeGen(doc).generate(doc);
-        final declPattern = RegExp(
-          r'^(?:sealed |final |abstract )*(?:class|enum) (\w+)',
-          multiLine: true,
-        );
-        final owner = <String, String>{};
-        for (final entry in files.entries) {
-          for (final match in declPattern.allMatches(entry.value)) {
-            final name = match.group(1)!;
-            if (name.startsWith('_')) continue;
-            expect(
-              owner,
-              isNot(contains(name)),
-              reason: '$name declared in both ${owner[name]} and ${entry.key}',
-            );
-            owner[name] = entry.key;
-          }
-        }
+        final owner = _declarationOwners(_makeGen(doc).generate(doc));
         // The user's component keeps its name; the synthesised one gives way.
         expect(owner['FooString'], 'models/foo_string.dart');
         expect(owner['FooString2'], 'models/foo.dart');
