@@ -5,6 +5,14 @@ All notable changes to `dart_openapi_generator` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-28
+
+### Added
+
+- **`model_class_modifier` option: generated models can now be mocked.** Models were emitted as `final class`, and `final` forbids `implements` outside the declaring library — which is exactly the relation a test double needs, since `mockito` generates `class MockUser extends Mock implements User` and its `SmartFake` fallback implements the type too. The symptom was a `MissingDummyValueError` naming `mockito` rather than the model, thrown while the stub was being *defined* (`when(...)`) rather than when the stubbed method was called, and it spread to every layer whose contract carried a generated model. Setting `model_class_modifier: "none"` in `build.yaml` emits models as plain `class` declarations instead. Applies to object classes (including `allOf`) and `oneOf` variant arms. **The default is unchanged (`"final"`), so existing output is byte-identical.** See [Testing](https://docs.page/angeloavv/dart_openapi_generator/advanced#testing).
+
+  Two kinds of generated type are deliberately out of reach of this option and still need `provideDummy`: `oneOf` wrappers, which are `sealed` because that is what makes `switch` over the union exhaustive, and generated enums, which can never be implemented.
+
 ## [0.3.0] - 2026-08-18
 
 ### Fixed
