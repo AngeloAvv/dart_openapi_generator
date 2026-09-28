@@ -3,6 +3,7 @@ import 'package:dart_openapi_generator/src/generator/model_generator.dart';
 import 'package:dart_openapi_generator/src/layout/model_layout.dart';
 import 'package:dart_openapi_generator/src/model/schema_object.dart';
 import 'package:dart_openapi_generator/src/model/spec_document.dart';
+import 'package:dart_openapi_generator/src/model_class_modifier.dart';
 import 'package:dart_openapi_generator/src/name_registry/name_registry.dart';
 import 'package:test/test.dart';
 
@@ -16,17 +17,25 @@ SpecDocument _makeDoc({Map<String, SchemaObject> schemas = const {}}) =>
       securitySchemes: const {},
     );
 
-ModelGenerator _makeGen(SpecDocument doc) {
+ModelGenerator _makeGen(
+  SpecDocument doc, {
+  ModelClassModifier modelClassModifier = ModelClassModifier.final$,
+}) {
   final registry = buildNameRegistry(doc);
   return ModelGenerator(
     registry,
     ModelLayout.build(doc, registry),
     DateTimeConverter.iso8601,
+    modelClassModifier: modelClassModifier,
   );
 }
 
-String _source(SpecDocument doc, String filename) {
-  final gen = _makeGen(doc);
+String _source(
+  SpecDocument doc,
+  String filename, {
+  ModelClassModifier modelClassModifier = ModelClassModifier.final$,
+}) {
+  final gen = _makeGen(doc, modelClassModifier: modelClassModifier);
   final result = gen.generate(doc);
   return result[filename] ??
       (throw StateError('File not found: $filename. Got: ${result.keys}'));
@@ -771,6 +780,86 @@ void main() {
       expect(src, contains('sealed class Thing'));
       expect(src, contains('final class ThingVariant0 extends Thing'));
       expect(src, contains('final String a;'));
+    });
+  });
+
+  group('ModelGenerator — model_class_modifier', () {
+    SpecDocument mixedDoc() => _makeDoc(
+      schemas: {
+        'Point': _point,
+        'Paged': _paged,
+        'PointsResponse': const OneOfSchema(
+          name: 'PointsResponse',
+          variants: [
+            ObjectSchema(name: 'Paged', properties: [], required: []),
+            ArraySchema(
+              items: ObjectSchema(name: 'Point', properties: [], required: []),
+            ),
+          ],
+        ),
+      },
+    );
+
+    test('defaults to `final class` — 0.3.0 output is unchanged', () {
+      final src = _source(
+        _makeDoc(schemas: {'Point': _point}),
+        'models/point.dart',
+      );
+      expect(src, contains('final class Point'));
+    });
+
+    test('"none" drops the modifier on object classes', () {
+      final src = _source(
+        _makeDoc(schemas: {'Point': _point}),
+        'models/point.dart',
+        modelClassModifier: ModelClassModifier.none,
+      );
+      expect(src, matches(RegExp(r'^class Point\b', multiLine: true)));
+      expect(src, isNot(contains('final class Point')));
+    });
+
+    test('"none" drops the modifier on oneOf variant arms too', () {
+      final src = _source(
+        mixedDoc(),
+        'models/points_response.dart',
+        modelClassModifier: ModelClassModifier.none,
+      );
+      expect(
+        src,
+        contains('class PointsResponsePointList extends PointsResponse'),
+      );
+      expect(src, isNot(contains('final class')));
+    });
+
+    test('the sealed oneOf wrapper stays sealed under "none"', () {
+      final src = _source(
+        mixedDoc(),
+        'models/points_response.dart',
+        modelClassModifier: ModelClassModifier.none,
+      );
+      expect(src, contains('sealed class PointsResponse'));
+    });
+
+    test('"none" changes the class modifier and nothing else', () {
+      final doc = _makeDoc(
+        schemas: {
+          'Thing': const ObjectSchema(
+            name: 'Thing',
+            properties: [_id],
+            required: ['id'],
+          ),
+        },
+      );
+      final src = _source(
+        doc,
+        'models/thing.dart',
+        modelClassModifier: ModelClassModifier.none,
+      );
+      expect(src, isNot(contains('final class Thing')));
+      expect(src, contains('final String id;'));
+      expect(src, contains('Thing copyWith('));
+      expect(src, contains('Map<String, dynamic> toJson()'));
+      expect(src, contains('factory Thing.fromJson('));
     });
   });
 
