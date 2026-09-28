@@ -6,6 +6,7 @@ import '../layout/one_of_plan.dart';
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
+import '../model_class_modifier.dart';
 import '../name_registry/keyword_escaper.dart';
 import '../name_registry/name_registry.dart';
 import 'code_builder_emitter.dart';
@@ -26,6 +27,7 @@ import 'code_builder_helpers.dart';
 final class ModelGenerator {
   final NameRegistry _registry;
   final DateTimeConverter _dateTimeConverter;
+  final ModelClassModifier _modelClassModifier;
 
   /// Optional warning sink for enum value sanitization and other advisory
   /// messages. Callers should route this to `log.warning` in the builder context.
@@ -39,8 +41,14 @@ final class ModelGenerator {
     this._registry,
     this._layout,
     this._dateTimeConverter, {
+    ModelClassModifier modelClassModifier = ModelClassModifier.final$,
     this.onWarning,
-  });
+  }) : _modelClassModifier = modelClassModifier;
+
+  ClassModifier? get _classModifier => switch (_modelClassModifier) {
+    ModelClassModifier.final$ => ClassModifier.final$,
+    ModelClassModifier.none => null,
+  };
 
   /// Generates one Dart source file per model file in [document].
   ///
@@ -308,7 +316,7 @@ final class ModelGenerator {
     List<String> implementsClauses = const [],
   }) {
     return Class((c) {
-      c.modifier = ClassModifier.final$;
+      c.modifier = _classModifier;
       c.name = className;
       if (extendsClause != null) c.extend = refer(extendsClause);
       for (final iface in implementsClauses) {
@@ -1034,7 +1042,7 @@ final class ModelGenerator {
     final decode = _fromJsonExpr(valueProp, 'json', nullable: false);
     final encode = _toJsonExpr(valueProp);
     return Class((c) {
-      c.modifier = ClassModifier.final$;
+      c.modifier = _classModifier;
       c.name = className;
       c.extend = refer(wrapperClassName);
       c.fields.add(

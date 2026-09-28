@@ -1,6 +1,7 @@
 import 'package:build/build.dart';
 
 import 'date_time_converter.dart';
+import 'model_class_modifier.dart';
 
 /// Resolved builder configuration, sourced from the `options:` block of the
 /// consumer's `build.yaml` (via [BuilderOptions.config]) rather than a Dart
@@ -11,6 +12,7 @@ final class GeneratorConfig {
   final String outputDir;
   final String clientName;
   final DateTimeConverter dateTimeConverter;
+  final ModelClassModifier modelClassModifier;
   final bool debugLogging;
 
   const GeneratorConfig({
@@ -18,6 +20,7 @@ final class GeneratorConfig {
     required this.outputDir,
     required this.clientName,
     required this.dateTimeConverter,
+    required this.modelClassModifier,
     required this.debugLogging,
   });
 
@@ -52,6 +55,9 @@ final class GeneratorConfig {
       outputDir: outputDir,
       clientName: (config['client_name'] as String?) ?? 'ApiClient',
       dateTimeConverter: _readDateTimeConverter(config['date_time_converter']),
+      modelClassModifier: _readModelClassModifier(
+        config['model_class_modifier'],
+      ),
       debugLogging: (config['debug_logging'] as bool?) ?? false,
     );
   }
@@ -73,5 +79,29 @@ final class GeneratorConfig {
         'Expected one of: ${DateTimeConverter.values.map((v) => v.name).join(', ')}',
       );
     }
+  }
+
+  static const _modelClassModifierNames = <String, ModelClassModifier>{
+    'final': ModelClassModifier.final$,
+    'none': ModelClassModifier.none,
+  };
+
+  static ModelClassModifier _readModelClassModifier(Object? raw) {
+    if (raw == null) return ModelClassModifier.final$;
+    final valid = _modelClassModifierNames.keys.join(', ');
+    if (raw is! String) {
+      throw ArgumentError(
+        'dart_openapi_generator: "model_class_modifier" must be a string '
+        '(one of $valid), got: $raw',
+      );
+    }
+    final value = _modelClassModifierNames[raw];
+    if (value == null) {
+      throw ArgumentError(
+        'dart_openapi_generator: unknown "model_class_modifier" value "$raw". '
+        'Expected one of: $valid',
+      );
+    }
+    return value;
   }
 }

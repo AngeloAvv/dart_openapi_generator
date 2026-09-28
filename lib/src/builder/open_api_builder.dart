@@ -74,6 +74,7 @@ final class OpenApiBuilder implements Builder {
       registry,
       layout,
       config.dateTimeConverter,
+      modelClassModifier: config.modelClassModifier,
       onWarning: onWarning,
     ).generate(parseResult.document);
     final serviceFiles = ServiceGenerator(

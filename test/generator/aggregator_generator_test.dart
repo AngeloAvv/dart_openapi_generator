@@ -1,4 +1,5 @@
 import 'package:dart_openapi_generator/src/date_time_converter.dart';
+import 'package:dart_openapi_generator/src/model_class_modifier.dart';
 import 'package:dart_openapi_generator/src/generator/aggregator_generator.dart';
 import 'package:dart_openapi_generator/src/generator_config.dart';
 import 'package:dart_openapi_generator/src/model/spec_document.dart';
@@ -29,6 +30,7 @@ GeneratorConfig _makeConfig({
   outputDir: outputDir,
   clientName: clientName,
   dateTimeConverter: DateTimeConverter.iso8601,
+  modelClassModifier: ModelClassModifier.final$,
   debugLogging: false,
 );
 

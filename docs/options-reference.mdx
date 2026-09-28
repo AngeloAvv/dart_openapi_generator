@@ -45,6 +45,12 @@ targets:
   `'timestamp'`. See [DateTimeConverter](#date_time_converter-1) below.
 </Property>
 
+<Property name="model_class_modifier" type="String">
+  Class modifier applied to generated model classes — `'final'` (default) or `'none'`. Set it to
+  `'none'` if you need to create test doubles for generated models. See
+  [model_class_modifier](#model_class_modifier-1) below.
+</Property>
+
 <Property name="debug_logging" type="bool">
   When `true`, the generator logs every file it prepares. Defaults to `false` (errors only).
 </Property>
@@ -68,6 +74,56 @@ targets:
           input_spec: "openapi/api.yaml"
           output_dir: "lib/generated"
           date_time_converter: "timestamp"
+```
+
+## model_class_modifier
+
+Controls the [class modifier](https://dart.dev/language/class-modifiers) on generated model
+classes. Applies to object classes (including `allOf` merges) and to `oneOf` variant arms.
+
+| Value | Emits | `extends` outside the library | `implements` outside the library | Test doubles |
+|-------|-------|-------------------------------|----------------------------------|--------------|
+| `final` (default) | `final class User { ... }` | ✗ | ✗ | ✗ |
+| `none` | `class User { ... }` | ✓ | ✓ | ✓ |
+
+The default states that the generator owns its wire types and nobody should subtype them. The
+cost is that `mockito` cannot produce a test double for a generated model: a generated mock is
+`class MockUser extends Mock implements User`, and `final` forbids `implements`. Switching to
+`none` restores that escape hatch — see [Testing](/advanced#testing).
+
+```yaml title="build.yaml"
+targets:
+  $default:
+    builders:
+      dart_openapi_generator:
+        options:
+          input_spec: "openapi/api.yaml"
+          output_dir: "lib/generated"
+          model_class_modifier: "none"
+```
+
+<Warning>
+  `none` also opens `extends`, which generated models do not really support: `copyWith` and
+  `fromJson` always construct the base type, so a subclass silently loses its own fields on the
+  first copy. Use `implements` (or a mock) rather than `extends` on a generated model.
+</Warning>
+
+### What this option does not cover
+
+Two kinds of generated type stay un-mockable whatever you set here, because their restriction
+does not come from this modifier:
+
+- **`oneOf` wrappers** are emitted as `sealed`, and a `sealed` type cannot be implemented outside
+  its own library. This is deliberate: `sealed` is what makes `switch` over the union exhaustive.
+- **Generated enums** are Dart `enum` declarations, which can never be implemented.
+
+For both, register a dummy instead:
+
+```dart
+setUpAll(() {
+  provideDummy<Notification>(const EmailNotification(address: 'a@b.c'));
+  provideDummy<UserRole>(UserRole.admin);
+});
 ```
 
 ---

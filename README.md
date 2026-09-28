@@ -69,6 +69,7 @@ All parameters are set in the `options:` block of your `build.yaml` (see [Setup]
 | `output_dir` | `String` | required | Directory for generated files, relative to package root. The barrel file is named after this path's last segment — see [Generated output structure](#generated-output-structure). |
 | `client_name` | `String` | `'ApiClient'` | Name of the generated aggregator class |
 | `date_time_converter` | `String` | `'iso8601'` | `'iso8601'` → ISO 8601 strings; `'timestamp'` → milliseconds since epoch |
+| `model_class_modifier` | `String` | `'final'` | Class modifier on generated models. `'none'` drops it so models can be mocked — see [Testing](https://docs.page/angeloavv/dart_openapi_generator/advanced#testing) |
 | `debug_logging` | `bool` | `false` | Log every file prepared |
 
 Why `build.yaml` and not a Dart annotation: `input_spec`/`output_dir` must be readable **synchronously**, in the builder factory, before build_runner freezes its asset graph — annotation resolution requires a build already in progress, so it can't run early enough. See [How it works](#how-it-works).
@@ -288,6 +289,7 @@ dart_openapi_generator/
 │   ├── builder/                     ← OpenApiBuilder (build_runner entry)
 │   ├── generator_config.dart        ← GeneratorConfig, sourced from build.yaml options
 │   ├── date_time_converter.dart     ← DateTimeConverter enum
+│   ├── model_class_modifier.dart    ← ModelClassModifier enum
 │   ├── parser/                      ← OpenAPI 3.x YAML/JSON parser
 │   ├── generator/                   ← ModelGenerator, ServiceGenerator, AggregatorGenerator
 │   ├── writer/                      ← FileWriter (format + barrel)

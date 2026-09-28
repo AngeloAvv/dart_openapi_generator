@@ -166,6 +166,97 @@ try {
 
 ---
 
+## Testing
+
+`mockito` generates a mock as `class MockUserApi extends Mock implements UserApi` — it always
+reaches for `implements`, never `extends`. Generated **service** classes are plain `class`
+declarations, so they mock out of the box. Generated **models** are `final class` by default,
+and `final` forbids `implements` outside the declaring library, so no test double can be
+produced for them.
+
+### `MissingDummyValueError`
+
+The symptom is an error that names `mockito` rather than the generated model, and — the part
+that costs the most time — it fires while the stub is being *defined*, not when the stubbed
+method is called:
+
+```dart
+final api = MockUserApi();
+// throws here, on the `when(...)` line itself
+when(api.getUser('1')).thenAnswer((_) async => User(id: '1', name: 'A', email: 'a@b.c'));
+```
+
+```
+MissingDummyValueError: User
+
+This means Mockito was not smart enough to generate a dummy value of type
+'User'. Please consider using either 'provideDummy' or 'provideDummyBuilder'
+functions to give Mockito a proper dummy value.
+```
+
+`when(api.getUser('1'))` invokes the method for real before `when()` ever sees it, and the
+generated mock passes `returnValue:` as an eagerly evaluated argument. That value comes from
+`dummyValue<User>()`, which falls back to building a `SmartFake` — and a `SmartFake` *implements*
+`User`. A `final class` cannot be implemented, so there is no fallback and the call throws, even
+though the very next line would have replaced the return value.
+
+### Option 1 — generate models without the modifier
+
+Set [`model_class_modifier`](/options-reference#model_class_modifier-1) to `'none'`:
+
+```yaml title="build.yaml"
+targets:
+  $default:
+    builders:
+      dart_openapi_generator:
+        options:
+          input_spec: "openapi/api.yaml"
+          output_dir: "lib/generated"
+          model_class_modifier: "none"
+```
+
+Generated models become plain `class` declarations and mock like anything else:
+
+```dart
+@GenerateMocks([UserApi])
+void main() {
+  test('getUser', () async {
+    final api = MockUserApi();
+    when(api.getUser('1')).thenAnswer((_) async => User(id: '1', name: 'A', email: 'a@b.c'));
+    expect((await api.getUser('1')).id, '1');
+  });
+}
+```
+
+### Option 2 — register a dummy
+
+Keeps models `final`, at the cost of one registration per type per test file:
+
+```dart
+setUpAll(() {
+  provideDummy<User>(User(id: '', name: '', email: ''));
+});
+```
+
+This is also the **only** option for the two kinds of generated type that
+`model_class_modifier` cannot help with — `oneOf` wrappers, which are `sealed`, and generated
+enums:
+
+```dart
+setUpAll(() {
+  provideDummy<Notification>(const EmailNotification(address: 'a@b.c'));
+  provideDummy<UserRole>(UserRole.admin);
+});
+```
+
+<Warning>
+  Prefer `implements` over `extends` when hand-writing a fake for a generated model. `copyWith`
+  and `fromJson` always construct the base type, so a subclass added via `extends` silently loses
+  its own fields on the first copy.
+</Warning>
+
+---
+
 ## Supported OpenAPI Features
 
 ### Schemas
@@ -260,6 +351,7 @@ rename one schema or operation in the spec.
 - **`in: cookie` parameters are not generated.** The generator logs a warning and recommends Dio interceptors for cookie-based auth.
 - **`requestBody` on GET/HEAD/OPTIONS is not sent.** A warning is logged; HTTP semantics prevent sending a body on these methods.
 - **Per-field `date_time_converter` overrides are not supported.** The setting applies globally.
+- **`oneOf` wrappers and generated enums cannot be mocked.** `model_class_modifier` does not reach them: wrappers are `sealed` (which is what makes `switch` over the union exhaustive) and enums can never be implemented. Use `provideDummy` — see [Testing](#testing).
 - **No `webhooks` or root-level `pathItems` (OpenAPI 3.1/3.2).** Only `paths` and `components/schemas` are processed.
 - **Only `application/json` request/response bodies.** Multipart, form-encoded, and other content types are not generated.
 

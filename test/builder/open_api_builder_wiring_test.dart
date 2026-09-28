@@ -5,6 +5,7 @@ import 'package:build/build.dart';
 import 'package:build_test/build_test.dart';
 import 'package:dart_openapi_generator/builder.dart';
 import 'package:dart_openapi_generator/src/date_time_converter.dart';
+import 'package:dart_openapi_generator/src/model_class_modifier.dart';
 import 'package:dart_openapi_generator/src/generator/aggregator_generator.dart';
 import 'package:dart_openapi_generator/src/generator/model_generator.dart';
 import 'package:dart_openapi_generator/src/generator_config.dart';
@@ -24,6 +25,7 @@ GeneratorConfig _makeConfig({String clientName = 'ApiClient'}) =>
       outputDir: 'lib/generated',
       clientName: clientName,
       dateTimeConverter: DateTimeConverter.iso8601,
+      modelClassModifier: ModelClassModifier.final$,
       debugLogging: false,
     );
 
