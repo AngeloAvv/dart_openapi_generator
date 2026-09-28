@@ -814,7 +814,7 @@ void main() {
         'models/point.dart',
         modelClassModifier: ModelClassModifier.none,
       );
-      expect(src, contains('class Point'));
+      expect(src, matches(RegExp(r'^class Point\b', multiLine: true)));
       expect(src, isNot(contains('final class Point')));
     });
 
