@@ -32,7 +32,7 @@ jobs:
       - test
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Dart SDK
         uses: dart-lang/setup-dart@v1
@@ -55,7 +55,7 @@ jobs:
       - analyze
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Dart SDK
         uses: dart-lang/setup-dart@v1
