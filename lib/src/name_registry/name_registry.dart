@@ -111,7 +111,7 @@ NameRegistry buildNameRegistry(SpecDocument document, {OneOfPlan? oneOfPlan}) {
         jsonPointer: '${op.path}:${op.method}',
       );
     }
-    final requestSchema = op.requestBody?.jsonSchema;
+    final requestSchema = op.requestBody?.schema;
     if (requestSchema != null && isNameable(requestSchema)) {
       final name = '${base}Request';
       classSpecNames.putIfAbsent(
@@ -121,7 +121,7 @@ NameRegistry buildNameRegistry(SpecDocument document, {OneOfPlan? oneOfPlan}) {
     }
     // Collect response schemas (200/201 typically have bodies)
     for (final response in op.responses.values) {
-      final responseSchema = response.jsonSchema;
+      final responseSchema = response.schema;
       if (responseSchema != null && isNameable(responseSchema)) {
         final suffix = responseSuffix(response.statusCode);
         final name = '$base$suffix';

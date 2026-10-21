@@ -72,10 +72,14 @@ final class EnumSchema extends SchemaObject {
 /// An OpenAPI primitive schema: `string`, `integer`, `number`, or `boolean`.
 ///
 /// [format] captures `format: date-time`, `format: int64`, etc. May be null.
+/// [contentMediaType] and [contentEncoding] are the OpenAPI 3.1 keywords
+/// describing string content (`contentMediaType: image/png`).
 @immutable
 final class PrimitiveSchema extends SchemaObject {
   final String primitiveType; // 'string' | 'integer' | 'number' | 'boolean'
   final String? format;
+  final String? contentMediaType;
+  final String? contentEncoding;
 
   const PrimitiveSchema({
     super.name,
@@ -83,7 +87,17 @@ final class PrimitiveSchema extends SchemaObject {
     super.isNullable,
     required this.primitiveType,
     this.format,
+    this.contentMediaType,
+    this.contentEncoding,
   });
+
+  /// Whether this is raw binary content: `format: binary` (OpenAPI 3.0), or a
+  /// `contentMediaType` without a `contentEncoding` (OpenAPI 3.1 — with an
+  /// encoding such as `base64`, the content is text).
+  bool get isBinary =>
+      primitiveType == 'string' &&
+      (format == 'binary' ||
+          (contentMediaType != null && contentEncoding == null));
 }
 
 /// An OpenAPI `type: array` schema.
@@ -219,3 +233,11 @@ String cyclicRefTargetName(SchemaObject schema) {
   final s = schema as _CyclicRefSchema;
   return s.refPointer.split('/').last;
 }
+
+/// Whether [schema] is raw binary content (see [PrimitiveSchema.isBinary]),
+/// or an array of it.
+bool isBinarySchema(SchemaObject schema) => switch (schema) {
+  PrimitiveSchema() => schema.isBinary,
+  ArraySchema(:final items) => items is PrimitiveSchema && items.isBinary,
+  _ => false,
+};

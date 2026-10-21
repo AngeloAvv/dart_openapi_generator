@@ -1,0 +1,119 @@
+openapi: 3.0.3
+info:
+  title: Multipart bodies without files
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /tickets:
+    post:
+      operationId: createTicket
+      tags: [Tickets]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TicketForm'
+            encoding:
+              csv:
+                contentType: text/csv
+              metadata:
+                contentType: application/vnd.ticket+json
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+  /tickets/{id}/notes:
+    post:
+      operationId: addNote
+      tags: [Tickets]
+      description: An optional, inline body.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                pinned:
+                  type: boolean
+      responses:
+        '204':
+          description: Added
+  /tickets/import:
+    post:
+      operationId: importTickets
+      tags: [Tickets]
+      description: A free-form multipart body.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '204':
+          description: Imported
+components:
+  schemas:
+    Priority:
+      type: integer
+      enum: [1, 2, 3]
+    Status:
+      type: string
+      enum: [open, closed]
+    Metadata:
+      type: object
+      properties:
+        source:
+          type: string
+    TicketForm:
+      type: object
+      required: [title, priority, status, dueAt, labels]
+      properties:
+        title:
+          type: string
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          $ref: '#/components/schemas/Status'
+        dueAt:
+          type: string
+          format: date-time
+        estimate:
+          type: number
+        urgent:
+          type: boolean
+        assignee:
+          type: string
+          nullable: true
+        labels:
+          type: array
+          items:
+            type: string
+        csv:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        related:
+          type: array
+          items:
+            $ref: '#/components/schemas/Metadata'
+    Ticket:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: integer

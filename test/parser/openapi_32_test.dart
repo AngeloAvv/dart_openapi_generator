@@ -54,7 +54,7 @@ paths:
       expect(op.parameters.first.location, equals('querystring'));
     });
 
-    test('empty response schema {} → jsonSchema is null (treated as void)', () {
+    test('empty response schema {} → schema is null (treated as void)', () {
       const yaml = '''
 openapi: "3.0.3"
 info:
@@ -73,10 +73,10 @@ paths:
 ''';
       final doc = _parseYaml(yaml);
       final op = doc.operations.first;
-      expect(op.responses['201']!.jsonSchema, isNull);
+      expect(op.responses['201']!.schema, isNull);
     });
 
-    test('empty request body schema {} → jsonSchema is null', () {
+    test('empty request body schema {} → schema is null', () {
       const yaml = '''
 openapi: "3.0.3"
 info:
@@ -96,7 +96,7 @@ paths:
 ''';
       final doc = _parseYaml(yaml);
       final op = doc.operations.first;
-      expect(op.requestBody!.jsonSchema, isNull);
+      expect(op.requestBody!.schema, isNull);
     });
 
     test('additionalMethods stored on 3.2 spec (from fixture)', () async {

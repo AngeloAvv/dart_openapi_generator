@@ -136,6 +136,8 @@ final class SchemaParser {
         description: raw['description'] as String?,
         primitiveType: effectiveType,
         format: raw['format'] as String?,
+        contentMediaType: raw['contentMediaType'] as String?,
+        contentEncoding: raw['contentEncoding'] as String?,
         isNullable: isNullable,
       );
     }
@@ -312,6 +314,8 @@ final class SchemaParser {
         isNullable: schema.isNullable,
         primitiveType: schema.primitiveType,
         format: schema.format,
+        contentMediaType: schema.contentMediaType,
+        contentEncoding: schema.contentEncoding,
       ),
       ArraySchema() => ArraySchema(
         description: description,

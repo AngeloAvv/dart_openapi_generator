@@ -53,7 +53,7 @@ const _intSchema = PrimitiveSchema(primitiveType: 'integer');
 
 const _ok200 = ResponseObject(
   statusCode: '200',
-  jsonSchema: PrimitiveSchema(primitiveType: 'string'),
+  schema: PrimitiveSchema(primitiveType: 'string'),
 );
 
 // ---------------------------------------------------------------------------
@@ -832,7 +832,7 @@ void main() {
               parameters: [],
               requestBody: RequestBodyObject(
                 required: true,
-                jsonSchema: ObjectSchema(
+                schema: ObjectSchema(
                   name: 'User',
                   properties: [],
                   required: [],
@@ -869,7 +869,7 @@ void main() {
               parameters: [],
               requestBody: RequestBodyObject(
                 required: false,
-                jsonSchema: ObjectSchema(
+                schema: ObjectSchema(
                   name: 'User',
                   properties: [],
                   required: [],
@@ -891,36 +891,31 @@ void main() {
   // 204 / void response
   // -------------------------------------------------------------------------
   group('ServiceGenerator — 204/void response', () {
-    test(
-      'responses with 204 and null jsonSchema → return type Future<void>',
-      () {
-        final doc = _makeDoc(
-          operations: [
-            const OperationItem(
-              path: '/items/{id}',
-              method: 'delete',
-              operationId: 'deleteItem',
-              tags: ['item'],
-              parameters: [
-                ParameterObject(
-                  name: 'id',
-                  location: 'path',
-                  required: true,
-                  schema: _strSchema,
-                ),
-              ],
-              responses: {
-                '204': ResponseObject(statusCode: '204', jsonSchema: null),
-              },
-              security: [],
-              additionalMethods: [],
-            ),
-          ],
-        );
-        final src = _source(doc, 'services/item_api.dart');
-        expect(src, contains('Future<void>'));
-      },
-    );
+    test('responses with 204 and null schema → return type Future<void>', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/items/{id}',
+            method: 'delete',
+            operationId: 'deleteItem',
+            tags: ['item'],
+            parameters: [
+              ParameterObject(
+                name: 'id',
+                location: 'path',
+                required: true,
+                schema: _strSchema,
+              ),
+            ],
+            responses: {'204': ResponseObject(statusCode: '204', schema: null)},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/item_api.dart');
+      expect(src, contains('Future<void>'));
+    });
 
     test('Future<void> method does NOT contain .data!', () {
       final doc = _makeDoc(
@@ -938,9 +933,7 @@ void main() {
                 schema: _strSchema,
               ),
             ],
-            responses: {
-              '204': ResponseObject(statusCode: '204', jsonSchema: null),
-            },
+            responses: {'204': ResponseObject(statusCode: '204', schema: null)},
             security: [],
             additionalMethods: [],
           ),
@@ -975,7 +968,7 @@ void main() {
               responses: {
                 '200': ResponseObject(
                   statusCode: '200',
-                  jsonSchema: ArraySchema(
+                  schema: ArraySchema(
                     items: ObjectSchema(
                       name: 'User',
                       properties: [],
@@ -1014,7 +1007,7 @@ void main() {
               responses: {
                 '200': ResponseObject(
                   statusCode: '200',
-                  jsonSchema: ArraySchema(
+                  schema: ArraySchema(
                     items: ObjectSchema(
                       name: 'User',
                       properties: [],
@@ -1355,7 +1348,7 @@ void main() {
         final warnings = <String>[];
         const created = ResponseObject(
           statusCode: '201',
-          jsonSchema: PrimitiveSchema(primitiveType: 'string'),
+          schema: PrimitiveSchema(primitiveType: 'string'),
         );
         final doc = _makeDoc(
           operations: [
@@ -1513,7 +1506,7 @@ void main() {
       () {
         // The NameRegistry registers inline response schemas using the operation base name.
         // For operationId 'getWidget', the registry key is 'GetWidgetResponse'.
-        // We need to provide the schema as a ResponseObject with a non-null jsonSchema
+        // We need to provide the schema as a ResponseObject with a non-null schema
         // that has name == null (inline/anonymous). The registry will pick up
         // 'GetWidgetResponse' from pass-1 collection.
         final inlineSchema = const ObjectSchema(
@@ -1532,10 +1525,7 @@ void main() {
               tags: ['widget'],
               parameters: const [],
               responses: {
-                '200': ResponseObject(
-                  statusCode: '200',
-                  jsonSchema: inlineSchema,
-                ),
+                '200': ResponseObject(statusCode: '200', schema: inlineSchema),
               },
               security: const [],
               additionalMethods: const [],
@@ -1575,10 +1565,7 @@ void main() {
               tags: ['unknown'],
               parameters: const [],
               responses: {
-                '200': ResponseObject(
-                  statusCode: '200',
-                  jsonSchema: inlineSchema,
-                ),
+                '200': ResponseObject(statusCode: '200', schema: inlineSchema),
               },
               security: const [],
               additionalMethods: const [],
@@ -1676,7 +1663,7 @@ void main() {
               responses: {
                 '200': ResponseObject(
                   statusCode: '200',
-                  jsonSchema: ObjectSchema(
+                  schema: ObjectSchema(
                     name: 'Zeta',
                     properties: [],
                     required: [],
@@ -1695,7 +1682,7 @@ void main() {
               responses: {
                 '200': ResponseObject(
                   statusCode: '200',
-                  jsonSchema: ObjectSchema(
+                  schema: ObjectSchema(
                     name: 'Alpha',
                     properties: [],
                     required: [],
@@ -1737,7 +1724,7 @@ void main() {
     test(
       'operation with 201 response schema null (parsed from empty {}) → return type Future<void>',
       () {
-        // When the spec has "schema: {}" the parser now sets jsonSchema = null.
+        // When the spec has "schema: {}" the parser now sets schema = null.
         // The service generator must then emit Future<void>, not RegisterDeviceResponse.
         final doc = _makeDoc(
           operations: [
@@ -1748,7 +1735,7 @@ void main() {
               tags: ['devices'],
               parameters: [],
               responses: {
-                '201': ResponseObject(statusCode: '201', jsonSchema: null),
+                '201': ResponseObject(statusCode: '201', schema: null),
               },
               security: [],
               additionalMethods: [],
@@ -2005,7 +1992,7 @@ void main() {
           responses: {
             '200': ResponseObject(
               statusCode: '200',
-              jsonSchema: ArraySchema(items: payload),
+              schema: ArraySchema(items: payload),
             ),
           },
           security: [],
@@ -2046,7 +2033,7 @@ void main() {
           tags: ['payload'],
           parameters: [],
           responses: {
-            '200': ResponseObject(statusCode: '200', jsonSchema: payload),
+            '200': ResponseObject(statusCode: '200', schema: payload),
           },
           security: [],
           additionalMethods: [],

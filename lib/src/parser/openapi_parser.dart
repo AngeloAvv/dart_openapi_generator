@@ -89,12 +89,12 @@ final class OpenApiParser {
 
     for (final op in operations) {
       final base = operationBaseName(op.operationId, op.method, op.path);
-      final requestSchema = op.requestBody?.jsonSchema;
+      final requestSchema = op.requestBody?.schema;
       if (requestSchema != null && _isNameableInlineSchema(requestSchema)) {
         registerInlineBodySchema('${base}Request', requestSchema);
       }
       for (final response in op.responses.values) {
-        final responseSchema = response.jsonSchema;
+        final responseSchema = response.schema;
         if (responseSchema != null && _isNameableInlineSchema(responseSchema)) {
           registerInlineBodySchema(
             '$base${responseSuffix(response.statusCode)}',

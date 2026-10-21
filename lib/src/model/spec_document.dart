@@ -1,5 +1,6 @@
 import 'package:meta/meta.dart';
 
+import 'media_type.dart';
 import 'schema_object.dart';
 
 /// The primary output of the OpenAPI parser.
@@ -104,18 +105,57 @@ final class ParameterObject {
 
 /// An OpenAPI Request Body Object.
 ///
-/// [jsonSchema] is the schema for `content['application/json'].schema`.
-/// Null when the request body has no JSON content type.
+/// [mediaType] is the `content` key the generated method sends, chosen by
+/// [selectMediaType]: JSON first, then `application/x-www-form-urlencoded`,
+/// then `multipart/form-data`, otherwise the first declared media type. Null
+/// when `content` is empty — or when the object is built in code with a
+/// [schema] only, which then stands for JSON.
+/// [schema] is the schema of [mediaType]. It is only parsed for the kinds the
+/// generator types (JSON and the two form kinds); null otherwise, and null
+/// when the media type declares no schema or an empty one.
+/// [encoding] is the Encoding Object map of [mediaType], keyed by property
+/// name; only meaningful for the two form kinds.
 @immutable
 final class RequestBodyObject {
   final String? description;
   final bool required;
-  final SchemaObject? jsonSchema;
+  final String? mediaType;
+  final SchemaObject? schema;
+  final Map<String, EncodingObject> encoding;
 
   const RequestBodyObject({
     this.description,
     required this.required,
-    this.jsonSchema,
+    this.mediaType,
+    this.schema,
+    this.encoding = const {},
+  });
+
+  /// How [mediaType] is encoded; null when the body declares no content.
+  MediaTypeKind? get kind => _kind(mediaType, schema);
+}
+
+/// An OpenAPI Encoding Object: how one property of a form body is serialized.
+///
+/// [contentType] is the media type of the part (`multipart/form-data`).
+/// [style], [explode] and [allowReserved] are the serialization hints of an
+/// `application/x-www-form-urlencoded` property.
+/// [hasHeaders] records that per-part `headers` were declared; they are not
+/// generated.
+@immutable
+final class EncodingObject {
+  final String? contentType;
+  final String? style;
+  final bool? explode;
+  final bool allowReserved;
+  final bool hasHeaders;
+
+  const EncodingObject({
+    this.contentType,
+    this.style,
+    this.explode,
+    this.allowReserved = false,
+    this.hasHeaders = false,
   });
 }
 
@@ -123,19 +163,28 @@ final class RequestBodyObject {
 ///
 /// [statusCode] is the string key from the responses map (e.g., `"200"`,
 ///   `"204"`, `"default"`).
-/// [jsonSchema] is the schema for `content['application/json'].schema`.
-/// Null for 204 / no-body responses.
+/// [mediaType] is the `content` key the generated method decodes, chosen by
+///   [selectMediaType]; null for a response without content (a 204), or
+///   when the object is built in code with a [schema] only, which then
+///   stands for JSON.
+/// [schema] is the schema of [mediaType] when it is a JSON media type; null
+///   for other media types and for JSON without a schema.
 @immutable
 final class ResponseObject {
   final String statusCode;
   final String? description;
-  final SchemaObject? jsonSchema;
+  final String? mediaType;
+  final SchemaObject? schema;
 
   const ResponseObject({
     required this.statusCode,
     this.description,
-    this.jsonSchema,
+    this.mediaType,
+    this.schema,
   });
+
+  /// How [mediaType] is decoded; null when the response has no content.
+  MediaTypeKind? get kind => _kind(mediaType, schema);
 }
 
 /// An OpenAPI Security Scheme Object (from `components/securitySchemes`).
@@ -164,3 +213,10 @@ final class SecurityScheme {
     this.paramName,
   });
 }
+
+MediaTypeKind? _kind(String? mediaType, SchemaObject? schema) =>
+    mediaType != null
+        ? classifyMediaType(mediaType)
+        : schema != null
+        ? MediaTypeKind.json
+        : null;

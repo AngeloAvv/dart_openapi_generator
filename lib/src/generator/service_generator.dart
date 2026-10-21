@@ -1,13 +1,17 @@
 import 'package:code_builder/code_builder.dart';
 
+import '../date_time_converter.dart';
 import '../layout/model_layout.dart';
+import '../model/media_type.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
 import '../name_registry/keyword_escaper.dart';
 import '../name_registry/name_converter.dart';
 import '../name_registry/name_registry.dart';
+import '../parser/operation_naming.dart';
 import 'code_builder_emitter.dart';
 import 'code_builder_helpers.dart';
+import 'form_body.dart';
 
 /// Converts [SpecDocument.operations] (grouped by tag) into a map of
 /// filename → Dart source for one [{Tag}Api] class per tag.
@@ -23,9 +27,14 @@ final class ServiceGenerator {
   final NameRegistry _registry;
 
   /// Optional warning sink for cookie-param skips, no-2xx operations,
-  /// non-200 2xx fallbacks, and 3.2 additionalMethod stubs.
+  /// non-200 2xx fallbacks, untyped request bodies and responses, form
+  /// encodings that cannot be honoured, and 3.2 additionalMethod stubs.
   /// Callers should route this to `log.warning` in the builder context.
   final void Function(String)? onWarning;
+
+  /// How `DateTime` properties of a `multipart/form-data` body are written,
+  /// matching the `toJson()` of the models.
+  final DateTimeConverter _dateTimeConverter;
 
   static const _getLikeMethods = {'get', 'head', 'options'};
   static const _deleteLikeMethods = {'delete'};
@@ -42,7 +51,12 @@ final class ServiceGenerator {
   /// once per document by the caller, like [NameRegistry].
   final ModelLayout _layout;
 
-  const ServiceGenerator(this._registry, this._layout, {this.onWarning});
+  const ServiceGenerator(
+    this._registry,
+    this._layout, {
+    this.onWarning,
+    DateTimeConverter dateTimeConverter = DateTimeConverter.iso8601,
+  }) : _dateTimeConverter = dateTimeConverter;
 
   /// Generates one Dart source file per tag in [document].
   ///
@@ -67,12 +81,15 @@ final class ServiceGenerator {
     // accumulator is a local threaded through the builders — and reported as a
     // single aggregated warning instead of one line per operation.
     final non200Primary = <String>[];
+    // Same for operations whose primary response is not JSON, and is returned
+    // as text or bytes.
+    final untypedPrimary = <String>[];
 
     final result = <String, String>{};
     for (final tag in sortedTags) {
       final ops = tagGroups[tag]!;
       final fileName = _tagToFileName(tag);
-      final source = _emitServiceFile(tag, ops, non200Primary);
+      final source = _emitServiceFile(tag, ops, non200Primary, untypedPrimary);
       result[fileName] = source;
     }
 
@@ -80,6 +97,12 @@ final class ServiceGenerator {
       onWarning?.call(
         '${non200Primary.length} operation(s) use a non-200 2xx response as '
         'the primary response: ${non200Primary.join(', ')}.',
+      );
+    }
+    if (untypedPrimary.isNotEmpty) {
+      onWarning?.call(
+        '${untypedPrimary.length} operation(s) have a primary response that is '
+        'not JSON, returned undecoded: ${untypedPrimary.join(', ')}.',
       );
     }
     return result;
@@ -93,9 +116,16 @@ final class ServiceGenerator {
     String tag,
     List<OperationItem> ops,
     List<String> non200Primary,
+    List<String> untypedPrimary,
   ) {
     final className = _tagToClassName(tag);
-    final imports = _collectImports(ops);
+    final bodyPlans = {for (final op in ops) op: _planBody(op)};
+    final imports = _collectImports(ops, bodyPlans);
+    final dartImports = {
+      if (bodyPlans.values.any((p) => p.needsJsonEncode)) 'dart:convert',
+      if (ops.any((op) => _responseKind(op) == _ResponseKind.bytes))
+        'dart:typed_data',
+    };
 
     // Sort ops alphabetically by derived method name
     final sortedOps =
@@ -103,6 +133,9 @@ final class ServiceGenerator {
 
     return emitLibrary(
       Library((lib) {
+        for (final imp in dartImports.toList()..sort()) {
+          lib.directives.add(Directive.import(imp));
+        }
         lib.directives.add(Directive.import('package:dio/dio.dart'));
         for (final imp in imports) {
           lib.directives.add(Directive.import(imp));
@@ -131,7 +164,9 @@ final class ServiceGenerator {
             );
 
             for (final op in sortedOps) {
-              c.methods.add(_buildMethod(op, non200Primary));
+              c.methods.add(
+                _buildMethod(op, bodyPlans[op]!, non200Primary, untypedPrimary),
+              );
             }
 
             // Emit additionalMethod stubs after all standard methods
@@ -146,20 +181,23 @@ final class ServiceGenerator {
   // Import collection
   // ---------------------------------------------------------------------------
 
-  Set<String> _collectModelImports(List<OperationItem> ops) {
+  Set<String> _collectModelImports(
+    List<OperationItem> ops,
+    Map<OperationItem, _BodyPlan> bodyPlans,
+  ) {
     final importSet = <String>{};
 
     for (final op in ops) {
       // Return type imports
       final primary = _selectPrimary2xx(op.responses);
-      if (primary != null && primary.jsonSchema != null) {
-        final schema = primary.jsonSchema!;
+      if (primary != null && primary.schema != null) {
+        final schema = primary.schema!;
         _addSchemaImports(schema, op, importSet);
       }
 
-      // Request body imports
-      if (op.requestBody?.jsonSchema != null) {
-        final bodySchema = op.requestBody!.jsonSchema!;
+      // Request body imports: only for a body typed with its schema.
+      final bodySchema = op.requestBody?.schema;
+      if (bodySchema != null && bodyPlans[op]!.isTyped) {
         _addSingleSchemaImport(
           bodySchema,
           op,
@@ -258,8 +296,11 @@ final class ServiceGenerator {
     if (import != null) importSet.add(import);
   }
 
-  List<String> _collectImports(List<OperationItem> ops) {
-    final importSet = _collectModelImports(ops);
+  List<String> _collectImports(
+    List<OperationItem> ops,
+    Map<OperationItem, _BodyPlan> bodyPlans,
+  ) {
+    final importSet = _collectModelImports(ops, bodyPlans);
     return importSet.toList()..sort();
   }
 
@@ -267,7 +308,12 @@ final class ServiceGenerator {
   // Method builder
   // ---------------------------------------------------------------------------
 
-  Method _buildMethod(OperationItem op, List<String> non200Primary) {
+  Method _buildMethod(
+    OperationItem op,
+    _BodyPlan body,
+    List<String> non200Primary,
+    List<String> untypedPrimary,
+  ) {
     final pathParams =
         op.parameters.where((p) => p.location == 'path').toList();
     final queryParams =
@@ -287,12 +333,17 @@ final class ServiceGenerator {
       );
     }
 
-    final returnType = _resolveReturnType(op, non200Primary);
+    for (final warning in body.warnings) {
+      onWarning?.call('Operation "${_opLabel(op)}": $warning');
+    }
+
+    final returnType = _resolveReturnType(op, non200Primary, untypedPrimary);
+    final responseKind = _responseKind(op);
     final methodName = _methodName(op);
     final orderedPathParams = _extractPathParamOrder(op.path, pathParams);
-    final hasBody = op.requestBody?.jsonSchema != null;
-    final bodyRequired = op.requestBody?.required ?? false;
-    final bodyType = hasBody ? _resolveBodyType(op) : null;
+    final hasBody = body.type != null;
+    final bodyRequired = body.required;
+    final bodyType = body.type;
     final verbLower = op.method.toLowerCase();
     final emitSendProgress =
         verbLower != 'get' &&
@@ -324,6 +375,24 @@ final class ServiceGenerator {
         for (final p in paramsWithDesc) {
           final dartParamName = escapeKeyword(toLowerCamelCase(p.name));
           m.docs.add('/// - [$dartParamName] ${p.description}');
+        }
+      }
+      final responseDoc = switch (responseKind) {
+        _ResponseKind.text =>
+          'Returns the `${_selectPrimary2xx(op.responses)!.mediaType}` '
+              'response body as text.',
+        _ResponseKind.bytes =>
+          'Returns the `${_selectPrimary2xx(op.responses)!.mediaType}` '
+              'response body as raw bytes.',
+        _ => null,
+      };
+      for (final paragraph in [
+        ...body.docs,
+        if (responseDoc != null) responseDoc,
+      ]) {
+        m.docs.add('///');
+        for (final line in _wrapDoc(paragraph)) {
+          m.docs.add('/// $line');
         }
       }
       m.docs.add('///');
@@ -388,6 +457,21 @@ final class ServiceGenerator {
           }),
         );
       }
+      // Content type of an untyped body
+      if (body.contentTypeParam case final contentTypeParam?) {
+        m.optionalParameters.add(
+          Parameter((param) {
+            param.name = contentTypeParam;
+            param.type = refer('String');
+            param.named = true;
+            if (body.contentTypeDefault case final value?) {
+              param.defaultTo = Code(dartStringLiteral(value));
+            } else {
+              param.required = true;
+            }
+          }),
+        );
+      }
       // Dio override params
       m.optionalParameters.add(
         Parameter((p) {
@@ -442,9 +526,8 @@ final class ServiceGenerator {
         queryParams: queryParams,
         headerParams: headerParams,
         returnType: returnType,
-        hasBody: hasBody,
-        bodyRequired: bodyRequired,
-        bodyType: bodyType,
+        responseKind: responseKind,
+        body: body,
       );
     });
   }
@@ -553,9 +636,8 @@ final class ServiceGenerator {
     required List<ParameterObject> queryParams,
     required List<ParameterObject> headerParams,
     required String returnType,
-    required bool hasBody,
-    required bool bodyRequired,
-    required String? bodyType,
+    required _ResponseKind responseKind,
+    required _BodyPlan body,
   }) {
     final method = op.method.toLowerCase();
     final isGetLike = _getLikeMethods.contains(method);
@@ -578,6 +660,7 @@ final class ServiceGenerator {
       ..._buildWarningComments(op),
       ..._buildHeaderStatements(headerParams),
       ..._buildQueryStatements(queryParams),
+      for (final statement in body.statements) Code(statement),
       ..._buildDioCallStatements(
         op,
         pathParams: pathParams,
@@ -589,9 +672,8 @@ final class ServiceGenerator {
         isVoid: isVoid,
         isList: isList,
         isPolymorphic: isPolymorphic,
-        hasBody: hasBody,
-        bodyRequired: bodyRequired,
-        bodyType: bodyType,
+        responseKind: responseKind,
+        body: body,
       ),
       ..._buildResponseStatements(
         returnType,
@@ -599,6 +681,9 @@ final class ServiceGenerator {
         isList: isList,
         isMap: isMap,
         isPolymorphic: isPolymorphic,
+        isUndecoded:
+            responseKind == _ResponseKind.text ||
+            responseKind == _ResponseKind.bytes,
       ),
     ]);
   }
@@ -696,10 +781,10 @@ final class ServiceGenerator {
     required bool isVoid,
     required bool isList,
     required bool isPolymorphic,
-    required bool hasBody,
-    required bool bodyRequired,
-    required String? bodyType,
+    required _ResponseKind responseKind,
+    required _BodyPlan body,
   }) {
+    final hasBody = body.type != null;
     if (hasBody && isGetLike) {
       onWarning?.call(
         'Operation "${op.operationId ?? "${op.method} ${op.path}"}" is '
@@ -716,6 +801,10 @@ final class ServiceGenerator {
     final dioTypeParam =
         isVoid
             ? 'void'
+            : responseKind == _ResponseKind.text
+            ? 'String'
+            : responseKind == _ResponseKind.bytes
+            ? 'Uint8List'
             // A list of a polymorphic union is still a JSON list at the top
             // level; only its elements are untyped.
             : isList
@@ -728,8 +817,8 @@ final class ServiceGenerator {
             : 'Map<String, dynamic>';
 
     final namedArgs = <String, Expression>{};
-    if (hasBody && !isGetLike && bodyType != null) {
-      namedArgs['data'] = _buildBodyExpr(bodyType, bodyRequired);
+    if (hasBody && !isGetLike && body.data != null) {
+      namedArgs['data'] = body.data!;
     }
     if (queryParams.isNotEmpty) {
       namedArgs['queryParameters'] = refer('queryParameters');
@@ -738,6 +827,12 @@ final class ServiceGenerator {
       method,
       headerParams.isNotEmpty,
       needsMethodOption,
+      contentType: isGetLike ? null : body.contentType,
+      responseType: switch (responseKind) {
+        _ResponseKind.text => refer('ResponseType').property('plain'),
+        _ResponseKind.bytes => refer('ResponseType').property('bytes'),
+        _ => null,
+      },
     );
     namedArgs['cancelToken'] = refer('cancelToken');
     if (supportsOnSendProgress) {
@@ -772,8 +867,28 @@ final class ServiceGenerator {
     required bool isList,
     required bool isMap,
     required bool isPolymorphic,
+    required bool isUndecoded,
   }) {
     if (isVoid) return const [];
+    if (isUndecoded) {
+      return [
+        declareFinal(
+          'data',
+        ).assign(refer('response').property('data')).statement,
+        ifStatement(
+          refer('data').equalTo(literalNull),
+          then: Block.of([
+            refer('StateError')
+                .call([
+                  literalString('Expected a response body but received null.'),
+                ])
+                .thrown
+                .statement,
+          ]),
+        ),
+        refer('data').returned.statement,
+      ];
+    }
 
     String? innerType;
     if (isList) {
@@ -839,9 +954,13 @@ final class ServiceGenerator {
   Expression _buildOptionsExpr(
     String method,
     bool hasHeaderParams,
-    bool needsMethodOption,
-  ) => refer('Options').call([], {
+    bool needsMethodOption, {
+    Expression? contentType,
+    Expression? responseType,
+  }) => refer('Options').call([], {
     if (needsMethodOption) 'method': literalString(method.toUpperCase()),
+    if (contentType != null) 'contentType': contentType,
+    if (responseType != null) 'responseType': responseType,
     'headers': hasHeaderParams ? refer('specHeaders') : refer('headers'),
     'extra': refer('extra'),
     'validateStatus': refer('validateStatus'),
@@ -887,12 +1006,18 @@ final class ServiceGenerator {
           ?.value;
 
   /// Resolves the Dart return type of [op], recording into [non200Primary] the
-  /// operations whose primary 2xx response is not `200`.
+  /// operations whose primary 2xx response is not `200`, and into
+  /// [untypedPrimary] those whose primary response is not JSON.
   ///
   /// Picking e.g. `201` when it is the only declared success response is
   /// correct behaviour, so it is not worth a warning per operation; the caller
-  /// emits a single aggregated line at the end of [generate].
-  String _resolveReturnType(OperationItem op, List<String> non200Primary) {
+  /// emits a single aggregated line at the end of [generate]. The same goes
+  /// for a download returned as bytes.
+  String _resolveReturnType(
+    OperationItem op,
+    List<String> non200Primary,
+    List<String> untypedPrimary,
+  ) {
     final primary = _selectPrimary2xx(op.responses);
     if (primary == null) {
       onWarning?.call(
@@ -906,9 +1031,38 @@ final class ServiceGenerator {
         '${op.operationId ?? "${op.method} ${op.path}"} (${primary.statusCode})',
       );
     }
-    final schema = primary.jsonSchema;
-    if (schema == null) return 'Future<void>';
-    return 'Future<${_schemaToType(schema, op)}>';
+    switch (_responseKind(op)) {
+      case _ResponseKind.none:
+        if (primary.kind != null) {
+          onWarning?.call(
+            'Operation "${_opLabel(op)}": the ${primary.statusCode} response is '
+            '"${primary.mediaType}" without a schema — returning Future<void>.',
+          );
+        }
+        return 'Future<void>';
+      case _ResponseKind.text:
+        untypedPrimary.add('${_opLabel(op)} (${primary.mediaType} → String)');
+        return 'Future<String>';
+      case _ResponseKind.bytes:
+        untypedPrimary.add(
+          '${_opLabel(op)} (${primary.mediaType} → Uint8List)',
+        );
+        return 'Future<Uint8List>';
+      case _ResponseKind.json:
+        return 'Future<${_schemaToType(primary.schema!, op)}>';
+    }
+  }
+
+  /// How the generated method decodes the primary 2xx response of [op].
+  _ResponseKind _responseKind(OperationItem op) {
+    final primary = _selectPrimary2xx(op.responses);
+    return switch (primary?.kind) {
+      null => _ResponseKind.none,
+      MediaTypeKind.json =>
+        primary!.schema == null ? _ResponseKind.none : _ResponseKind.json,
+      MediaTypeKind.text => _ResponseKind.text,
+      _ => _ResponseKind.bytes,
+    };
   }
 
   String _schemaToType(SchemaObject schema, OperationItem op) {
@@ -946,11 +1100,294 @@ final class ServiceGenerator {
   }
 
   // ---------------------------------------------------------------------------
+  // Request body plan
+  // ---------------------------------------------------------------------------
+
+  /// Decides how the method of [op] takes and sends its request body.
+  ///
+  /// The media type was chosen by the parser (see [selectMediaType]): a JSON
+  /// body is typed and sent as JSON; a form body (url-encoded or multipart)
+  /// is typed with its model and encoded field by field; anything else, and a
+  /// form body whose schema is not an object, is taken untyped and sent as-is.
+  _BodyPlan _planBody(OperationItem op) {
+    final plan = _planBodyOf(op);
+    // A GET-like method never sends its body (see _buildDioCallStatements),
+    // so there is nothing to encode.
+    return _getLikeMethods.contains(op.method.toLowerCase())
+        ? plan.withoutEncoding()
+        : plan;
+  }
+
+  _BodyPlan _planBodyOf(OperationItem op) {
+    final requestBody = op.requestBody;
+    final kind = requestBody?.kind;
+    if (requestBody == null || kind == null) return const _BodyPlan();
+    final mediaType = requestBody.mediaType ?? 'application/json';
+    final required = requestBody.required;
+    final schema = requestBody.schema;
+
+    switch (kind) {
+      case MediaTypeKind.json:
+        if (schema == null) {
+          return _BodyPlan(
+            warnings: [
+              'the "$mediaType" request body declares no schema; the method '
+                  'takes no body.',
+            ],
+          );
+        }
+        final type = _resolveBodyType(op);
+        return _BodyPlan(
+          type: type,
+          required: required,
+          isTyped: true,
+          data: _buildBodyExpr(type, required),
+          // Dio sends a map as `application/json` by default; any other JSON
+          // media type has to be set explicitly.
+          contentType:
+              mediaType == 'application/json'
+                  ? null
+                  : CodeExpression(Code(dartStringLiteral(mediaType))),
+        );
+      case MediaTypeKind.formUrlEncoded:
+      case MediaTypeKind.multipart:
+        return _planFormBody(op, requestBody);
+      case MediaTypeKind.text:
+      case MediaTypeKind.other:
+        return _planUntypedBody(
+          op,
+          requestBody,
+          'the request body media type "$mediaType" is not typed',
+        );
+    }
+  }
+
+  _BodyPlan _planFormBody(OperationItem op, RequestBodyObject requestBody) {
+    final mediaType = requestBody.mediaType!;
+    final isMultipart = requestBody.kind == MediaTypeKind.multipart;
+    final required = requestBody.required;
+    final schema = requestBody.schema;
+    if (schema == null) {
+      return _planUntypedBody(
+        op,
+        requestBody,
+        'the "$mediaType" request body declares no schema',
+      );
+    }
+
+    final type = _resolveBodyType(op);
+    final warnings = <String>[];
+    final docs = [
+      isMultipart
+          ? '[body] is sent as `multipart/form-data`, encoded into a new '
+              '[FormData] on every call. A [FormData] can be sent only once: '
+              'an interceptor that sends this request again (a token refresh, '
+              'a retry) has to send a copy, '
+              '`(options.data as FormData).clone()`, instead of the same '
+              'instance.'
+          : '[body] is sent as `application/x-www-form-urlencoded`.',
+    ];
+    _BodyPlan plan({
+      List<String> statements = const [],
+      required Expression data,
+      bool needsJsonEncode = false,
+    }) => _BodyPlan(
+      type: type,
+      required: required,
+      isTyped: true,
+      statements: statements,
+      data: data,
+      // Dio derives the multipart Content-Type, boundary included, from the
+      // FormData itself.
+      contentType:
+          isMultipart
+              ? null
+              : refer('Headers').property('formUrlEncodedContentType'),
+      docs: docs,
+      warnings: warnings,
+      needsJsonEncode: needsJsonEncode,
+    );
+
+    // A free-form object: the map is handed to Dio as it is.
+    if (type == 'Map<String, dynamic>') {
+      return plan(data: _formMapExpr(null, isMultipart, required));
+    }
+
+    final modelName = requestBodySchemaName(op);
+    final formSchema = _formSchema(schema);
+    final properties =
+        modelName == null
+            ? null
+            : formProperties(
+              formSchema,
+              modelName,
+              _registry,
+              requestBody.encoding,
+            );
+    if (properties == null) {
+      return _planUntypedBody(
+        op,
+        requestBody,
+        'the "$mediaType" request body schema is not an object',
+      );
+    }
+
+    if (formSchema
+        case ObjectSchema(
+          :final additionalProperties,
+          properties: final declared,
+        )
+        when additionalProperties != null &&
+            additionalProperties != false &&
+            declared.every((p) => p.specName != 'additionalProperties')) {
+      // A model that is nothing but a map sends that map.
+      if (properties.isEmpty) {
+        return plan(
+          data: _formMapExpr('additionalProperties', isMultipart, required),
+        );
+      }
+      warnings.add(
+        'the additional properties of the "$mediaType" request body are not '
+        'sent, only its declared properties.',
+      );
+    }
+
+    for (final p in properties) {
+      final contentType = p.encoding?.contentType;
+      if (contentType != null && isBinarySchema(p.schema)) {
+        docs.add(
+          'The spec expects the `${p.wireName}` file as `$contentType`: set '
+          'it as the `contentType` of its [MultipartFile].',
+        );
+      }
+    }
+
+    final encoder = FormBodyEncoder(_dateTimeConverter, warnings.add);
+    if (isMultipart) {
+      final adds = encoder.multipartStatements(properties);
+      return plan(
+        statements: [
+          'final formData = FormData();',
+          if (required)
+            ...adds
+          else if (adds.isNotEmpty) ...[
+            'if (body != null) {',
+            ...adds,
+            '}',
+          ],
+        ],
+        data:
+            required
+                ? refer('formData')
+                : CodeExpression(const Code('body == null ? null : formData')),
+        needsJsonEncode: adds.any((line) => line.contains('jsonEncode(')),
+      );
+    }
+
+    final toJson =
+        required
+            ? refer('body').property('toJson').call([])
+            : refer('body').nullSafeProperty('toJson').call([]);
+    final listFormats = encoder.urlEncodedListFormats(properties);
+    if (listFormats.isEmpty) return plan(data: toJson);
+    final adjustments = [
+      for (final MapEntry(:key, :value) in listFormats.entries) ...[
+        'if (formFields[${dartStringLiteral(key)}] '
+            'case final List<dynamic> value) {',
+        'formFields[${dartStringLiteral(key)}] = ListParam(value, $value);',
+        '}',
+      ],
+    ];
+    return plan(
+      statements: [
+        'final formFields = ${toJson.accept(DartEmitter())};',
+        if (required)
+          ...adjustments
+        else ...[
+          'if (formFields != null) {',
+          ...adjustments,
+          '}',
+        ],
+      ],
+      data: refer('formFields'),
+    );
+  }
+
+  /// The `data:` of a form body sent as a map: `body` itself, or its
+  /// [member] when given.
+  Expression _formMapExpr(String? member, bool isMultipart, bool required) {
+    final map = member == null ? 'body' : 'body.$member';
+    if (!isMultipart) {
+      // An optional body is null: so is the map.
+      return CodeExpression(
+        Code(required || member == null ? map : 'body?.$member'),
+      );
+    }
+    // `body` is promoted to non-null past the null check.
+    return CodeExpression(
+      Code(
+        required
+            ? 'FormData.fromMap($map)'
+            : 'body == null ? null : FormData.fromMap($map)',
+      ),
+    );
+  }
+
+  /// A body the method takes as `Object` and sends as-is, with the media type
+  /// declared by the spec as `Content-Type` — overridable through a
+  /// `contentType` parameter. [reason] starts the build warning.
+  _BodyPlan _planUntypedBody(
+    OperationItem op,
+    RequestBodyObject requestBody,
+    String reason,
+  ) {
+    final mediaType = requestBody.mediaType!;
+    // A media type range (`*/*`, `image/*`) is not a valid Content-Type: the
+    // caller has to name one.
+    final defaultContentType = mediaType.contains('*') ? null : mediaType;
+    final paramNames = {
+      for (final p in op.parameters) escapeKeyword(toLowerCamelCase(p.name)),
+    };
+    final contentTypeParam =
+        paramNames.contains('contentType') ? 'bodyContentType' : 'contentType';
+    return _BodyPlan(
+      type: 'Object',
+      required: requestBody.required,
+      data: refer('body'),
+      contentType: refer(contentTypeParam),
+      contentTypeParam: contentTypeParam,
+      contentTypeDefault: defaultContentType,
+      docs: [
+        '[body] is sent as it is, with the `Content-Type` [$contentTypeParam] '
+            '(the spec declares `$mediaType`): pass a `String`, a `Uint8List` '
+            'or a `Stream<List<int>>`.',
+      ],
+      warnings: [
+        defaultContentType == null
+            ? '$reason; the method takes it as `Object body`, sent as it is '
+                'with a required `$contentTypeParam` (the spec only declares '
+                'the range "$mediaType").'
+            : '$reason; the method takes it as `Object body`, sent as it is '
+                'with the Content-Type "$mediaType" (overridable through '
+                '`$contentTypeParam`).',
+      ],
+    );
+  }
+
+  /// The object schema encoded field by field for a form body: an anonymous
+  /// single-member `allOf` (`allOf: [$ref]`) stands for its member.
+  SchemaObject _formSchema(SchemaObject schema) => switch (schema) {
+    AllOfSchema() when schema.name == null && schema.schemas.length == 1 =>
+      schema.schemas.first,
+    _ => schema,
+  };
+
+  // ---------------------------------------------------------------------------
   // Request body type resolution
   // ---------------------------------------------------------------------------
 
   String _resolveBodyType(OperationItem op) {
-    final schema = op.requestBody?.jsonSchema;
+    final schema = op.requestBody?.schema;
     if (schema == null) return 'Map<String, dynamic>';
 
     if (schema is ArraySchema) {
@@ -1218,5 +1655,105 @@ final class ServiceGenerator {
   String _methodName(OperationItem op) =>
       escapeKeyword(toLowerCamelCase(_methodBaseName(op)));
 
+  /// How build warnings name [op].
+  String _opLabel(OperationItem op) =>
+      op.operationId ?? '${op.method} ${op.path}';
+
+  /// Splits [paragraph] into dartdoc lines that fit in 80 columns once
+  /// indented and prefixed with `/// ` (6 characters).
+  List<String> _wrapDoc(String paragraph) {
+    final lines = <String>[];
+    var line = '';
+    for (final word in paragraph.split(' ')) {
+      if (line.isNotEmpty && line.length + 1 + word.length > 74) {
+        lines.add(line);
+        line = word;
+      } else {
+        line = line.isEmpty ? word : '$line $word';
+      }
+    }
+    if (line.isNotEmpty) lines.add(line);
+    return lines;
+  }
+
   // [toSnakeCase] and [tagToSnake] are shared utilities from name_converter.dart.
+}
+
+/// How a generated method decodes its primary 2xx response.
+enum _ResponseKind {
+  /// No body (`Future<void>`).
+  none,
+
+  /// A JSON body, decoded into its Dart type.
+  json,
+
+  /// A `text/*` or XML body, returned as a `String`.
+  text,
+
+  /// Any other body, returned as a `Uint8List`.
+  bytes,
+}
+
+/// How a generated method takes and sends the request body of one operation.
+final class _BodyPlan {
+  /// The type of the `body` parameter, without `?`; null when the method
+  /// takes no body.
+  final String? type;
+
+  /// Whether `body` is a required positional parameter (otherwise it is a
+  /// named, nullable one).
+  final bool required;
+
+  /// Whether [type] comes from the body schema, whose model is then imported.
+  final bool isTyped;
+
+  /// Statements emitted before the Dio call (the encoding of a form body).
+  final List<String> statements;
+
+  /// The `data:` argument of the Dio call.
+  final Expression? data;
+
+  /// The `contentType:` of the call's `Options`; null leaves it to Dio.
+  final Expression? contentType;
+
+  /// Name of the `String` parameter carrying the Content-Type of an untyped
+  /// body, and its default value (null makes it required).
+  final String? contentTypeParam;
+  final String? contentTypeDefault;
+
+  /// Dartdoc paragraphs describing how the body is sent.
+  final List<String> docs;
+
+  /// Build warnings, completed with the operation name by the caller.
+  final List<String> warnings;
+
+  /// Whether [statements] use `jsonEncode` (`dart:convert`).
+  final bool needsJsonEncode;
+
+  /// This plan without the statements encoding the body, nor the docs
+  /// describing how it is sent.
+  _BodyPlan withoutEncoding() => _BodyPlan(
+    type: type,
+    required: required,
+    isTyped: isTyped,
+    data: data,
+    contentType: contentType,
+    contentTypeParam: contentTypeParam,
+    contentTypeDefault: contentTypeDefault,
+    warnings: warnings,
+  );
+
+  const _BodyPlan({
+    this.type,
+    this.required = false,
+    this.isTyped = false,
+    this.statements = const [],
+    this.data,
+    this.contentType,
+    this.contentTypeParam,
+    this.contentTypeDefault,
+    this.docs = const [],
+    this.warnings = const [],
+    this.needsJsonEncode = false,
+  });
 }

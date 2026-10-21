@@ -76,3 +76,16 @@ extension ExpressionHelpers on Expression {
   Expression arrowReturn(Expression result) =>
       CodeExpression(Block.of([code, Code('=>'), result.code]));
 }
+
+/// [value] as a single-quoted Dart string literal, escaping everything that
+/// would otherwise be read as code: quotes, backslashes and `$`.
+///
+/// Unlike [literalString], safe for any string coming from the spec.
+String dartStringLiteral(String value) {
+  final escaped = value
+      .replaceAll(r'\', r'\\')
+      .replaceAll("'", r"\'")
+      .replaceAll(r'$', r'\$')
+      .replaceAll('\n', r'\n');
+  return "'$escaped'";
+}

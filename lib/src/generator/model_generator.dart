@@ -9,6 +9,7 @@ import '../model/spec_document.dart';
 import '../model_class_modifier.dart';
 import '../name_registry/keyword_escaper.dart';
 import '../name_registry/name_registry.dart';
+import '../parser/operation_naming.dart';
 import 'code_builder_emitter.dart';
 import 'code_builder_helpers.dart';
 
@@ -61,6 +62,7 @@ final class ModelGenerator {
   /// Returns `Map<String, String>` where keys are `'models/<name>.dart'`
   /// and values are formatted Dart source strings.
   Map<String, String> generate(SpecDocument document) {
+    final multipartBodies = multipartBodySchemaNames(document);
     final result = <String, String>{};
     for (final file in _layout.files) {
       final body = <Spec>[];
@@ -78,6 +80,7 @@ final class ModelGenerator {
           schema,
           file,
           _layout.unionsImplementedBy(specName),
+          multipartBody: multipartBodies.contains(specName),
         );
         body.addAll(specs.body);
         imports.addAll(specs.imports);
@@ -89,7 +92,18 @@ final class ModelGenerator {
 
       result['models/$file'] = emitLibrary(
         Library((lib) {
-          for (final imp in imports.toList()..sort()) {
+          // Package imports (`package:dio`, for a multipart body's files)
+          // come before the relative ones.
+          final sorted =
+              imports.toList()..sort(
+                (a, b) =>
+                    a.startsWith('package:') == b.startsWith('package:')
+                        ? a.compareTo(b)
+                        : a.startsWith('package:')
+                        ? -1
+                        : 1,
+              );
+          for (final imp in sorted) {
             lib.directives.add(Directive.import(imp));
           }
           if (needsUndefined) {
@@ -109,12 +123,15 @@ final class ModelGenerator {
   // Top-level dispatch
   // ---------------------------------------------------------------------------
 
+  /// [multipartBody] is true for a model sent as a `multipart/form-data`
+  /// body: its binary properties become `MultipartFile`s.
   _SchemaSpecs _specsFor(
     String specName,
     SchemaObject schema,
     String selfFile,
-    List<String> implementsClauses,
-  ) {
+    List<String> implementsClauses, {
+    bool multipartBody = false,
+  }) {
     // _CyclicRefSchema is private to schema_object.dart; use isCyclicRef() to
     // detect it before entering the switch. A top-level cyclic-ref sentinel
     // means the schema IS the cycle root — skip emission but warn the user.
@@ -132,6 +149,7 @@ final class ModelGenerator {
         schema,
         selfFile,
         implementsClauses: implementsClauses,
+        multipartBody: multipartBody,
       ),
       EnumSchema() => _enumSpecs(specName, schema),
       PrimitiveSchema() => _primitiveSpecs(specName, schema),
@@ -141,6 +159,7 @@ final class ModelGenerator {
         schema,
         selfFile,
         implementsClauses: implementsClauses,
+        multipartBody: multipartBody,
       ),
       OneOfSchema() => _oneOfSpecs(
         specName,
@@ -233,11 +252,16 @@ final class ModelGenerator {
     String selfFile, {
     String? extendsClause,
     List<String> implementsClauses = const [],
+    bool multipartBody = false,
   }) {
     final className = _registry.dartClassName(specName);
 
     // Resolve properties sorted alphabetically by Dart field name
-    final resolvedProps = _resolveProperties(specName, schema);
+    final resolvedProps = _resolveProperties(
+      specName,
+      schema,
+      multipartBody: multipartBody,
+    );
 
     // Check for additionalProperties field.
     // Guard: skip synthetic entry if a real property already uses the same
@@ -301,7 +325,10 @@ final class ModelGenerator {
           implementsClauses: implementsClauses,
         ),
       ],
-      imports: _collectImportsForProps(selfFile, allProps).toSet(),
+      imports: {
+        ..._collectImportsForProps(selfFile, allProps),
+        if (allProps.any((p) => p.isFile)) 'package:dio/dio.dart',
+      },
       needsUndefined: needsUndefined,
       needsListEquals: allProps.any((p) => p.isListType),
       needsMapEquals: allProps.any((p) => p.isMapType),
@@ -727,6 +754,7 @@ final class ModelGenerator {
     AllOfSchema schema,
     String selfFile, {
     List<String> implementsClauses = const [],
+    bool multipartBody = false,
   }) {
     // Merge all ObjectSchema members
     final mergedProperties =
@@ -783,6 +811,7 @@ final class ModelGenerator {
       syntheticSchema,
       selfFile,
       implementsClauses: implementsClauses,
+      multipartBody: multipartBody,
     );
   }
 
@@ -1126,7 +1155,12 @@ final class ModelGenerator {
   // Property resolution helpers
   // ---------------------------------------------------------------------------
 
-  List<_ResolvedProp> _resolveProperties(String specName, ObjectSchema schema) {
+  /// [multipartBody]: see [_specsFor].
+  List<_ResolvedProp> _resolveProperties(
+    String specName,
+    ObjectSchema schema, {
+    bool multipartBody = false,
+  }) {
     final result = <_ResolvedProp>[];
 
     for (final prop in schema.properties) {
@@ -1160,7 +1194,16 @@ final class ModelGenerator {
         continue;
       }
 
-      final dartType = _dartType(specName, prop.schema);
+      // A file of a multipart body, alone or in an array. Its value is the
+      // MultipartFile itself: toJson() hands it over untouched, and the
+      // service encodes it as a file part.
+      final isFile = multipartBody && isBinarySchema(prop.schema);
+      final dartType =
+          isFile
+              ? (prop.schema is ArraySchema
+                  ? 'List<MultipartFile>'
+                  : 'MultipartFile')
+              : _dartType(specName, prop.schema);
       final isListType = dartType.startsWith('List<');
       final isMapType =
           dartType.startsWith('Map<') || dartType == 'Map<String, dynamic>';
@@ -1198,6 +1241,7 @@ final class ModelGenerator {
           dateTimeIsTimestamp: dateTimeIsTimestamp,
           isListOfGenerated: isListOfGenerated,
           isMapOfGenerated: isMapOfGenerated,
+          isFile: isFile,
           schema: prop.schema,
         ),
       );
@@ -1280,6 +1324,11 @@ final class ModelGenerator {
   }) {
     if (p.isCyclic) {
       return '${p.dartType}.fromJson($jsonAccess as Map<String, dynamic>)';
+    }
+    if (p.isFile) {
+      return p.isListType
+          ? '($jsonAccess as List<dynamic>).cast<MultipartFile>()'
+          : '$jsonAccess as MultipartFile';
     }
 
     final schema = p.schema;
@@ -1414,6 +1463,7 @@ final class ModelGenerator {
   }
 
   String _toJsonExpr(_ResolvedProp p) {
+    if (p.isFile) return p.fieldName;
     if (p.isCyclic) {
       return p.isNullable
           ? '${p.fieldName}!.toJson()'
@@ -1935,6 +1985,9 @@ final class _ResolvedProp {
   final bool dateTimeIsTimestamp;
   final bool isListOfGenerated;
   final bool isMapOfGenerated;
+
+  /// A `MultipartFile` (or a list of them) of a multipart body.
+  final bool isFile;
   final SchemaObject? schema;
 
   const _ResolvedProp({
@@ -1954,6 +2007,7 @@ final class _ResolvedProp {
     required this.dateTimeIsTimestamp,
     required this.isListOfGenerated,
     required this.isMapOfGenerated,
+    this.isFile = false,
     required this.schema,
   });
 }

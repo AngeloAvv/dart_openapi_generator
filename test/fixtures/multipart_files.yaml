@@ -1,0 +1,117 @@
+openapi: 3.0.3
+info:
+  title: Multipart bodies with files
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /documents:
+    post:
+      operationId: uploadDocument
+      tags: [Documents]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DocumentUpload'
+            encoding:
+              file:
+                contentType: application/pdf
+              thumbnail:
+                contentType: image/png, image/jpeg
+      responses:
+        '201':
+          description: Uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+  /documents/{id}/attachments:
+    put:
+      operationId: replaceAttachments
+      tags: [Documents]
+      description: An allOf body with an array of files.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AttachmentsUpload'
+      responses:
+        '204':
+          description: Replaced
+  /documents/{id}/raw:
+    put:
+      operationId: putRawDocument
+      tags: [Documents]
+      description: The same binary schema in a JSON body stays a String.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawDocument'
+      responses:
+        '204':
+          description: Stored
+components:
+  schemas:
+    DocumentUpload:
+      type: object
+      required: [file, title]
+      properties:
+        file:
+          type: string
+          format: binary
+        thumbnail:
+          type: string
+          format: binary
+        title:
+          type: string
+        pages:
+          type: integer
+    Owner:
+      type: object
+      required: [owner]
+      properties:
+        owner:
+          type: string
+    AttachmentsUpload:
+      allOf:
+        - $ref: '#/components/schemas/Owner'
+        - type: object
+          required: [files]
+          properties:
+            files:
+              type: array
+              items:
+                type: string
+                format: binary
+            note:
+              type: string
+    RawDocument:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          format: binary
+    Document:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
