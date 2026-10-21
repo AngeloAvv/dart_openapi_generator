@@ -363,6 +363,59 @@ void main() {
       );
     });
 
+    test('a list of content types sends the first concrete one', () {
+      const meta = ObjectSchema(name: 'Meta', properties: [], required: []);
+      final warnings = <String>[];
+      final src = _formSource(
+        multipart,
+        _thing({'csv': _str, 'meta': meta}),
+        encoding: const {
+          'csv': EncodingObject(contentType: 'text/*, text/csv, text/plain'),
+          'meta': EncodingObject(
+            contentType: 'application/json, application/vnd.x+json',
+          ),
+        },
+        extraSchemas: const {'Meta': meta},
+        warnings: warnings,
+      );
+      // A list, or a range, would make DioMediaType.parse throw at runtime.
+      expect(_flat(src), contains("DioMediaType.parse('text/csv')"));
+      expect(_flat(src), contains("DioMediaType.parse('application/json')"));
+      expect(src, isNot(contains(', text/plain')));
+      expect(
+        warnings,
+        contains(
+          allOf(
+            contains('multipart property "csv"'),
+            contains('the part is sent as "text/csv"'),
+          ),
+        ),
+      );
+      expect(
+        warnings,
+        contains(contains('the part is sent as "application/json"')),
+      );
+    });
+
+    test('a content type without a concrete media type is the default', () {
+      final warnings = <String>[];
+      final src = _formSource(
+        multipart,
+        _thing({'note': _str}),
+        encoding: const {'note': EncodingObject(contentType: 'text/*')},
+        warnings: warnings,
+      );
+      expect(
+        src,
+        contains("formData.fields.add(MapEntry('note', body.note));"),
+      );
+      expect(src, isNot(contains('DioMediaType')));
+      expect(
+        warnings,
+        contains(contains('"text/*", which has no concrete media type')),
+      );
+    });
+
     test('encoding.contentType of a file is documented', () {
       final src = _formSource(
         multipart,

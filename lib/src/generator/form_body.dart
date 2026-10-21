@@ -222,12 +222,12 @@ final class FormBodyEncoder {
   /// array property) of [property], whose schema is [schema].
   String _partAdd(FormProperty property, SchemaObject schema, String value) {
     final name = dartStringLiteral(property.wireName);
-    final contentType = property.encoding?.contentType;
 
     if (isBinarySchema(schema)) {
       return 'formData.files.add(MapEntry($name, $value.clone()));';
     }
 
+    final contentType = _partContentType(property);
     final String? text = _textValue(schema, value);
     if (text != null) {
       if (contentType == null) {
@@ -260,6 +260,40 @@ final class FormBodyEncoder {
     }
     return 'formData.files.add(MapEntry($name, '
         'MultipartFile.fromString(jsonEncode($json), contentType: $partType)));';
+  }
+
+  /// The media type of the part sent for [property], from its
+  /// `encoding.contentType`; null for the default type of the part.
+  ///
+  /// The Encoding Object allows a comma-separated list and media type ranges,
+  /// but a part is sent with a single, concrete type, which
+  /// `DioMediaType.parse` must accept: the first concrete entry of a list is
+  /// used, and a value without one falls back to the default. Both cases are
+  /// warned about.
+  String? _partContentType(FormProperty property) {
+    final declared = property.encoding?.contentType;
+    if (declared == null) return null;
+    final entries = [
+      for (final entry in declared.split(','))
+        if (entry.trim().isNotEmpty) entry.trim(),
+    ];
+    final concrete =
+        entries
+            .where((entry) => _concreteMediaType.hasMatch(entry))
+            .firstOrNull;
+    if (concrete == null) {
+      _warn(
+        'multipart property "${property.wireName}" declares the content type '
+        '"$declared", which has no concrete media type; the part is sent with '
+        'its default type.',
+      );
+    } else if (entries.length > 1) {
+      _warn(
+        'multipart property "${property.wireName}" declares several content '
+        'types ("$declared"); the part is sent as "$concrete".',
+      );
+    }
+    return concrete;
   }
 
   /// The `String` sent for the scalar [value] of [schema], or null when the
@@ -296,6 +330,12 @@ final class FormBodyEncoder {
 /// Whether the media type of an operation is one of the two form kinds.
 bool isFormKind(MediaTypeKind? kind) =>
     kind == MediaTypeKind.formUrlEncoded || kind == MediaTypeKind.multipart;
+
+/// A media type without wildcards, `type/subtype` optionally followed by
+/// parameters (RFC 9110 tokens).
+final _concreteMediaType = RegExp(
+  r"^[!#$%&'+.^_`|~0-9A-Za-z-]+/[!#$%&'+.^_`|~0-9A-Za-z-]+\s*(;.*)?$",
+);
 
 bool _isObjectLike(SchemaObject schema) =>
     isCyclicRef(schema) ||
