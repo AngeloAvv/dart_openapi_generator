@@ -27,7 +27,7 @@ dependencies:
   dio: ^5.0.0
 
 dev_dependencies:
-  dart_openapi_generator: ^0.2.0
+  dart_openapi_generator: ^0.5.0
   build_runner: ^2.4.0
 ```
 
@@ -167,14 +167,14 @@ Each OpenAPI tag produces one class. Operations within a tag are sorted alphabet
 Each method receives:
 
 - Path parameters as positional required arguments (in path-template order)
-- Required request body as a positional required argument named `body`
+- Required request body as a positional required argument named `body` (optional body → named `body`), typed and encoded according to its media type — see [Request and response media types](#request-and-response-media-types)
 - Query parameters as named arguments (`required` or optional matching the spec)
 - Header parameters as named `String` / `String?` arguments
 - Dio override parameters: `cancelToken`, `headers`, `extra`, `validateStatus`
 - `onSendProgress` (omitted for GET, HEAD, DELETE, OPTIONS)
 - `onReceiveProgress` (omitted for HEAD and DELETE)
 
-Return types are derived from the primary 2xx response (`200` preferred, then `201`, then the lowest 2xx code). Operations with no 2xx response return `Future<void>`.
+Return types are derived from the primary 2xx response (`200` preferred, then `201`, then the lowest 2xx code). Operations with no 2xx response return `Future<void>`. A JSON response is decoded into its type; a `text/*` or XML response is returned as a `String`, any other media type as a `Uint8List`.
 
 Example (from the example project):
 
@@ -202,6 +202,25 @@ class UsersApi {
 ```
 
 Cookie parameters are not supported. A build warning is emitted and the parameter is omitted. Use Dio interceptors for cookie-based auth.
+
+### Request and response media types
+
+When a request body declares several media types, the generated method uses the first JSON one (`application/json`, with parameters such as `; charset=utf-8`, or any `*/*+json`), then `application/x-www-form-urlencoded`, then `multipart/form-data`, otherwise the first one declared. Responses follow the same rule.
+
+| Media type | Generated method |
+|------------|------------------|
+| JSON | `body` typed with its model, sent as `body.toJson()`. A media type other than plain `application/json` is set as `contentType`. |
+| `application/x-www-form-urlencoded` | `body` typed with its model, sent as `body.toJson()` with `contentType: Headers.formUrlEncodedContentType`. Null fields are omitted, booleans are `true`/`false`, dates and enums use their `toJson()` value, arrays repeat the field (`tags=a&tags=b`, or `ListFormat.csv`/`ssv`/`pipes` per the spec's `style`/`explode`), objects use bracket notation (`deepObject`). |
+| `multipart/form-data` | `body` typed with its model; a new `FormData` is built inside the method on every call, one part per property. `format: binary` (3.0) and `contentMediaType` (3.1) properties are `MultipartFile`s on the model, sent as a `clone()`; objects are `application/json` parts; `encoding.contentType` is honoured. |
+| anything else (`application/octet-stream`, `text/plain`, `image/*`, ...) | `Object body` sent as it is, with a `String contentType` parameter defaulting to the spec's media type (required for a range such as `image/*`). |
+
+A `FormData` can be sent only once. An interceptor that sends a multipart request again — a token refresh, a retry — must send a copy:
+
+```dart
+if (options.data case final FormData data) options.data = data.clone();
+```
+
+Every construct the generator cannot encode as the spec describes it is reported as a build warning naming the operation and the media type: nothing is dropped silently.
 
 ## Generated aggregator class
 
@@ -253,7 +272,7 @@ final client = MyApiClient(
 | Spec sources | Local file only — no remote/HTTPS spec URLs |
 | `$ref` | Same-file `$ref` only (`#/components/schemas/...`) |
 | Primitive types | `string`, `integer`, `number`, `boolean` |
-| Formats | `date-time` → `DateTime` (via `date_time_converter`); all other formats ignored |
+| Formats | `date-time` → `DateTime` (via `date_time_converter`); in a `multipart/form-data` body, `binary` (3.0) and `contentMediaType` (3.1) → `MultipartFile`; all other formats ignored |
 | `type: null` | Parsed as `NullSchema`; top-level null schemas produce no file |
 | `nullable: true` (3.0) | Supported |
 | `type: [T, 'null']` (3.1) | Supported |
@@ -272,8 +291,11 @@ final client = MyApiClient(
 | Query parameters | Supported (required and optional) |
 | Header parameters | Supported (required and optional) |
 | Cookie parameters | Not supported; build warning emitted |
-| Request body | `application/json` schema resolved to a typed `body` parameter |
-| Response types | Primary 2xx response body (200 preferred) |
+| Request body (JSON) | `application/json`, `; charset=…` and `*/*+json` resolved to a typed `body` parameter |
+| Request body (`application/x-www-form-urlencoded`) | Typed `body` parameter, url-encoded; `style`/`explode` of arrays honoured, unsupported encodings warned about |
+| Request body (`multipart/form-data`) | Typed `body` parameter, encoded into a new `FormData` per call; binary properties → `MultipartFile` |
+| Request body (other media types) | `Object body` sent as-is with a `contentType` parameter; build warning emitted |
+| Response types | Primary 2xx response body (200 preferred): JSON decoded, `text/*`/XML → `String`, other → `Uint8List` |
 | Tags | One service class per tag; untagged ops → `DefaultApi` |
 | OpenAPI 3.2 non-standard verbs | Emitted as stubs using `_dio.request(options: Options(method: '...'))` |
 

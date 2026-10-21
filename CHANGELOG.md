@@ -5,6 +5,23 @@ All notable changes to `dart_openapi_generator` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-21
+
+### Added
+
+- **`application/x-www-form-urlencoded` and `multipart/form-data` request bodies.** The operation parser only read `content['application/json']`, so a body declared only as a form was dropped without a warning: the generated method had no `body` parameter at all, and the only workarounds were to declare the same schema under `application/json` and force the `Content-Type` through `headers`, or to call Dio by hand. Form bodies are now typed with their model like JSON ones.
+  - **url-encoded**: sent as `body.toJson()` with `Options(contentType: Headers.formUrlEncodedContentType)`. Null fields are omitted, booleans are `true`/`false`, dates and enums use their `toJson()` value, objects use bracket notation (`deepObject`). Arrays honour the Encoding Object: the default `style: form` + `explode: true` repeats the field, `explode: false` and the `spaceDelimited`/`pipeDelimited` styles become a Dio `ListParam` (`csv`/`ssv`/`pipes`).
+  - **multipart**: a new `FormData` is built inside the method on every call, one part per property. Properties with `format: binary` (3.0) or a `contentMediaType` without `contentEncoding` (3.1), alone or in an array, are `MultipartFile` fields on the model and are sent as a `clone()`, so the caller's file is never used up and the same body can be sent twice. Objects are `application/json` parts, and `encoding.contentType` is honoured. The dartdoc of every multipart method states that a `FormData` can be sent only once, so an interceptor that sends the request again (a token refresh, a retry) has to send `(options.data as FormData).clone()`.
+- **Untyped request bodies.** A body whose media type is neither JSON nor a form (`application/octet-stream`, `text/plain`, `image/*`, ...) is now an `Object body` sent as it is, with a `String contentType` parameter defaulting to the spec's media type — required when the spec only gives a range such as `image/*`. It used to be dropped.
+- **Non-JSON responses.** A `text/*` or XML primary response is returned as a `String` (`ResponseType.plain`), any other non-JSON one as a `Uint8List` (`ResponseType.bytes`). They used to return `Future<void>`, discarding the body.
+- **JSON media type variants.** `application/json; charset=utf-8` and every `*/*+json` (`application/problem+json`, `application/vnd.api+json`, `application/merge-patch+json`) are JSON: their bodies are typed and their responses decoded. A request media type other than plain `application/json` is set as `contentType`.
+
+### Changed
+
+- **When a body or a response declares several media types**, the generated method uses the first JSON one, then `application/x-www-form-urlencoded`, then `multipart/form-data`, otherwise the first declared. Specs that declare a form body *and* its JSON twin keep generating the JSON call, unchanged; drop the JSON twin to get the form call.
+- **Nothing is dropped silently any more.** Every body or response the generator cannot type, and every Encoding Object it cannot honour (an object property not in `deepObject` style, an array of objects, `allowReserved`, a part `contentType` in a url-encoded body, per-part `headers`), is a build warning naming the operation and the media type. A JSON body or response declared without a schema is warned about too.
+- **Generated code changes only where the spec has non-JSON bodies or responses.** For specs using `application/json` only, the output is byte-identical. A method whose non-JSON response used to return `Future<void>` now returns `Future<String>` or `Future<Uint8List>` — source-compatible for callers that only `await` it.
+
 ## [0.4.0] - 2026-09-28
 
 ### Added
