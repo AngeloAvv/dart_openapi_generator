@@ -72,3 +72,72 @@ Set<String> multipartBodySchemaNames(SpecDocument document) => {
     if (op.requestBody?.kind == MediaTypeKind.multipart)
       if (requestBodySchemaName(op) case final name?) name,
 };
+
+/// The operations of [document] that use one of [names] other than as a
+/// `multipart/form-data` body, keyed by name: in a JSON or url-encoded request
+/// body or in a JSON response, directly or nested in another schema, or
+/// nested in a multipart body (where it is sent as a JSON part).
+///
+/// A model sent as a multipart body has `MultipartFile` fields, which no JSON
+/// payload can carry: every use listed here breaks at runtime.
+Map<String, List<String>> nonMultipartUses(
+  SpecDocument document,
+  Set<String> names,
+) {
+  final uses = <String, List<String>>{};
+  for (final op in document.operations) {
+    final label = op.operationId ?? '${op.method.toUpperCase()} ${op.path}';
+    final found = <String>{};
+    final visited = <String>{};
+    void walk(SchemaObject schema) {
+      final name = schema.name;
+      if (name != null) {
+        if (names.contains(name)) found.add(name);
+        if (!visited.add(name)) return;
+      }
+      switch (schema) {
+        case ObjectSchema(:final properties, :final additionalProperties):
+          for (final property in properties) {
+            walk(property.schema);
+          }
+          if (additionalProperties is SchemaObject) walk(additionalProperties);
+        case ArraySchema(:final items):
+          walk(items);
+        case AllOfSchema(:final schemas):
+          schemas.forEach(walk);
+        case OneOfSchema(:final variants):
+          variants.forEach(walk);
+        default:
+      }
+    }
+
+    final body = op.requestBody?.schema;
+    if (body != null) {
+      if (op.requestBody!.kind == MediaTypeKind.multipart) {
+        // The body itself is the multipart use; what it nests is not.
+        switch (body) {
+          case ObjectSchema(:final properties):
+            for (final property in properties) {
+              walk(property.schema);
+            }
+          case AllOfSchema(:final schemas):
+            for (final member in schemas.whereType<ObjectSchema>()) {
+              for (final property in member.properties) {
+                walk(property.schema);
+              }
+            }
+          default:
+        }
+      } else {
+        walk(body);
+      }
+    }
+    for (final response in op.responses.values) {
+      if (response.schema case final schema?) walk(schema);
+    }
+    for (final name in found) {
+      uses.putIfAbsent(name, () => []).add(label);
+    }
+  }
+  return uses;
+}

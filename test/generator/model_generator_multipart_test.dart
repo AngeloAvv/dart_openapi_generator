@@ -24,38 +24,53 @@ const _upload = ObjectSchema(
 );
 
 /// The `Upload` model, sent as a body with [mediaType].
-String _uploadModel(String mediaType) {
-  final doc = SpecDocument(
-    specVersion: '3.0.3',
-    title: 'Test',
-    baseUrl: '',
-    schemas: const {'Upload': _upload},
-    operations: [
-      OperationItem(
-        path: '/uploads',
-        method: 'post',
-        operationId: 'upload',
-        tags: const [],
-        parameters: const [],
-        requestBody: RequestBodyObject(
+String _uploadModel(String mediaType) =>
+    _generate(
+      _uploadDoc(
+        RequestBodyObject(
           required: true,
           mediaType: mediaType,
           schema: _upload,
         ),
-        responses: const {},
-        security: const [],
-        additionalMethods: const [],
       ),
-    ],
-    securitySchemes: const {},
-  );
+    )['models/upload.dart']!;
+
+/// The models of [doc], with the build warnings collected into [warnings].
+Map<String, String> _generate(SpecDocument doc, {List<String>? warnings}) {
   final registry = buildNameRegistry(doc);
   return ModelGenerator(
     registry,
     ModelLayout.build(doc, registry),
     DateTimeConverter.iso8601,
-  ).generate(doc)['models/upload.dart']!;
+    onWarning: warnings?.add,
+  ).generate(doc);
 }
+
+/// A document whose `upload` operation sends [requestBody], and answers
+/// with [response].
+SpecDocument _uploadDoc(
+  RequestBodyObject requestBody, {
+  ResponseObject? response,
+}) => SpecDocument(
+  specVersion: '3.0.3',
+  title: 'Test',
+  baseUrl: '',
+  schemas: const {'Upload': _upload},
+  operations: [
+    OperationItem(
+      path: '/uploads',
+      method: 'post',
+      operationId: 'upload',
+      tags: const [],
+      parameters: const [],
+      requestBody: requestBody,
+      responses: {if (response != null) response.statusCode: response},
+      security: const [],
+      additionalMethods: const [],
+    ),
+  ],
+  securitySchemes: const {},
+);
 
 void main() {
   group('ModelGenerator — binary properties of a multipart body', () {
@@ -72,6 +87,42 @@ void main() {
       final src = _uploadModel('application/json');
       expect(src, isNot(contains('dio')));
       expect(src, contains('final String file;'));
+    });
+
+    test('a multipart model also decoded from JSON is warned about', () {
+      final warnings = <String>[];
+      _generate(
+        _uploadDoc(
+          const RequestBodyObject(
+            required: true,
+            mediaType: 'multipart/form-data',
+            schema: _upload,
+          ),
+          response: const ResponseObject(statusCode: '200', schema: _upload),
+        ),
+        warnings: warnings,
+      );
+      expect(warnings, [
+        allOf(
+          contains('Model "Upload" is sent as a multipart/form-data body'),
+          contains('used outside multipart bodies by upload'),
+        ),
+      ]);
+    });
+
+    test('a multipart model used nowhere else is not warned about', () {
+      final warnings = <String>[];
+      _generate(
+        _uploadDoc(
+          const RequestBodyObject(
+            required: true,
+            mediaType: 'multipart/form-data',
+            schema: _upload,
+          ),
+        ),
+        warnings: warnings,
+      );
+      expect(warnings, isEmpty);
     });
 
     test('the same schema sent url-encoded keeps a String', () {

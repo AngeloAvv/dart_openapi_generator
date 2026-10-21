@@ -63,6 +63,7 @@ final class ModelGenerator {
   /// and values are formatted Dart source strings.
   Map<String, String> generate(SpecDocument document) {
     final multipartBodies = multipartBodySchemaNames(document);
+    _warnSharedMultipartModels(document, multipartBodies);
     final result = <String, String>{};
     for (final file in _layout.files) {
       final body = <Spec>[];
@@ -117,6 +118,36 @@ final class ModelGenerator {
       );
     }
     return result;
+  }
+
+  /// Warns about every model of [multipartBodies] with files that is also
+  /// used outside multipart bodies: its `MultipartFile` fields cannot be
+  /// encoded to, nor decoded from, JSON.
+  void _warnSharedMultipartModels(
+    SpecDocument document,
+    Set<String> multipartBodies,
+  ) {
+    bool hasFiles(SchemaObject? schema) => switch (schema) {
+      ObjectSchema(:final properties) => properties.any(
+        (p) => isBinarySchema(p.schema),
+      ),
+      AllOfSchema(:final schemas) => schemas.any(hasFiles),
+      _ => false,
+    };
+    final withFiles = {
+      for (final name in multipartBodies)
+        if (hasFiles(document.schemas[name])) name,
+    };
+    final uses = nonMultipartUses(document, withFiles);
+    for (final name in uses.keys.toList()..sort()) {
+      onWarning?.call(
+        'Model "$name" is sent as a multipart/form-data body, so its binary '
+        'properties are MultipartFile fields; it is also used outside '
+        'multipart bodies by ${uses[name]!.join(', ')}, where those fields '
+        'cannot be encoded to or decoded from JSON. Declare a separate schema '
+        'for the multipart body.',
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------

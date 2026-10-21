@@ -508,10 +508,12 @@ Future<void> uploadAvatar(
 | `format: binary` (3.0), `contentMediaType` without `contentEncoding` (3.1) | A file part. The model field is a Dio `MultipartFile`, sent as a `clone()`: the caller's instance is never used up, so the same body can be sent twice |
 | `array` | One part per item, all with the property name |
 | `object` | An `application/json` part |
-| `encoding.contentType` set | A part of that type; for a file it is documented, and the caller sets it on the `MultipartFile` |
+| `encoding.contentType` set | A part of that type — the first concrete one of a list such as `image/png, image/jpeg`, the default type for a range such as `text/*` (both warned about); for a file it is documented, and the caller sets it on the `MultipartFile` |
 
 Only models sent as a multipart body get `MultipartFile` fields: the same `format: binary` in a
-JSON schema stays a `String`.
+JSON schema stays a `String`. A model with files that is also used outside multipart bodies — in a
+JSON response, say — cannot carry those fields there, so the build warns: declare a separate schema
+for the multipart body.
 
 **Any other media type** (`application/octet-stream`, `text/plain`, `image/*`, ...) — the method takes
 `Object body` and sends it as it is, with a `contentType` parameter that defaults to the spec's
