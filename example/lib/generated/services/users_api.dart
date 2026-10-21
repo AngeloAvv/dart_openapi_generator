@@ -5,6 +5,7 @@
 import 'package:dio/dio.dart';
 import '../models/metadata.dart';
 import '../models/notification.dart';
+import '../models/upload_avatar_request.dart';
 import '../models/user.dart';
 import '../models/user_profile.dart';
 
@@ -330,6 +331,46 @@ class UsersApi {
       throw StateError('Expected JSON response body but received null.');
     }
     return User.fromJson(data);
+  }
+
+  /// Upload the avatar of a user
+  ///
+  /// [body] is sent as `multipart/form-data`, encoded into a new [FormData] on
+  /// every call. A [FormData] can be sent only once: an interceptor that sends
+  /// this request again (a token refresh, a retry) has to send a copy,
+  /// `(options.data as FormData).clone()`, instead of the same instance.
+  ///
+  /// The spec expects the `image` file as `image/png, image/jpeg`: set it as
+  /// the `contentType` of its [MultipartFile].
+  ///
+  /// Throws [DioException] on non-2xx response.
+  Future<void> uploadAvatar(
+    String id,
+    UploadAvatarRequest body, {
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final formData = FormData();
+    if (body.caption != null) {
+      formData.fields.add(MapEntry('caption', body.caption!));
+    }
+    formData.files.add(MapEntry('image', body.image.clone()));
+    await _dio.put<void>(
+      '/users/${Uri.encodeComponent(id)}/avatar',
+      data: formData,
+      options: Options(
+        headers: headers,
+        extra: extra,
+        validateStatus: validateStatus,
+      ),
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
   }
 
   /// QUERY /users (OpenAPI 3.2 additional operation)

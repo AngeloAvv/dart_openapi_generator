@@ -384,7 +384,7 @@ class `{Tag}Api`. Every method:
 
 - Is named from `operationId` (lowerCamelCase), falling back to `{method}{PathSegments}` when no `operationId` is set
 - Accepts Dio override parameters: `cancelToken`, `headers`, `extra`, `validateStatus`, and where applicable `onSendProgress` / `onReceiveProgress`
-- Returns `Future<void>` when there is no 2xx response schema, `Future<List<T>>` for array responses, `Future<T>` for object responses
+- Returns `Future<void>` when there is no 2xx response schema, `Future<List<T>>` for array responses, `Future<T>` for object responses, `Future<String>` for a `text/*` or XML response and `Future<Uint8List>` for any other non-JSON one
 - Throws `DioException` on non-2xx responses (standard Dio behavior)
 - Documents `Throws [DioException] on non-2xx response.` in its dartdoc
 - URL-encodes path parameters with `Uri.encodeComponent`
@@ -434,6 +434,98 @@ class UsersApi {
 - Optional query/header parameters become named optional (`T?`) parameters
 - `cookie` parameters are not emitted — a warning is logged, and the dartdoc recommends Dio interceptors instead
 - Header parameters are merged with the caller-supplied `headers` map at runtime
+
+### Request bodies
+
+The request body is typed and encoded according to its media type. When the spec declares
+several, the method uses the first JSON one (`application/json`, with or without parameters such
+as `; charset=utf-8`, or any `*/*+json`), then `application/x-www-form-urlencoded`, then
+`multipart/form-data`, otherwise the first one declared. Responses follow the same rule.
+
+**JSON** — `body` is typed with its model and sent as `body.toJson()`. A JSON media type other
+than plain `application/json` (`application/merge-patch+json`, `application/vnd.api+json`) is set
+as `Options.contentType`.
+
+**`application/x-www-form-urlencoded`** — `body` is typed with its model and sent as
+`body.toJson()`, which Dio url-encodes:
+
+```dart
+Future<TokenResponse> createSession(
+  SessionForm body, {
+  // ...
+}) async {
+  final response = await _dio.post<Map<String, dynamic>>(
+    '/auth/session',
+    data: body.toJson(),
+    options: Options(
+      contentType: Headers.formUrlEncodedContentType,
+      // ...
+```
+
+| Property | On the wire |
+|----------|-------------|
+| `null` (unset optional, or `nullable`) | Omitted |
+| `string`, `integer`, `number` | The value as text |
+| `boolean` | `true` / `false` |
+| `format: date-time` | Its `toJson()` value — ISO 8601, or milliseconds with `date_time_converter: timestamp` |
+| `enum` | Its wire value |
+| `array` of scalars, `style: form` + `explode: true` (the default) | The field repeated: `tags=a&tags=b` |
+| `array`, `explode: false` / `spaceDelimited` / `pipeDelimited` | One field: `tags=a,b` / `a b` / `a\|b` (a Dio `ListParam`) |
+| `object`, `style: deepObject` | Bracket notation: `address[city]=London` |
+
+An object property without `style: deepObject` is still sent in bracket notation, and an array of
+objects as `ranges[0][from]=1`: OpenAPI's `form` style for objects is not implemented, and both
+cases are build warnings, as are `allowReserved` and a part `contentType`.
+
+**`multipart/form-data`** — `body` is typed with its model, and a new `FormData` is built inside the
+method on every call, one part per property in spec order:
+
+```dart
+/// [body] is sent as `multipart/form-data`, encoded into a new [FormData] on
+/// every call. A [FormData] can be sent only once: an interceptor that sends
+/// this request again (a token refresh, a retry) has to send a copy,
+/// `(options.data as FormData).clone()`, instead of the same instance.
+Future<void> uploadAvatar(
+  String id,
+  UploadAvatarRequest body, {
+  // ...
+}) async {
+  final formData = FormData();
+  if (body.caption != null) {
+    formData.fields.add(MapEntry('caption', body.caption!));
+  }
+  formData.files.add(MapEntry('image', body.image.clone()));
+  await _dio.put<void>(
+    '/users/${Uri.encodeComponent(id)}/avatar',
+    data: formData,
+    // ...
+```
+
+| Property | Part |
+|----------|------|
+| `null` | Omitted |
+| scalar (string, number, boolean, date-time, enum) | A text field, formatted as in a url-encoded body |
+| `format: binary` (3.0), `contentMediaType` without `contentEncoding` (3.1) | A file part. The model field is a Dio `MultipartFile`, sent as a `clone()`: the caller's instance is never used up, so the same body can be sent twice |
+| `array` | One part per item, all with the property name |
+| `object` | An `application/json` part |
+| `encoding.contentType` set | A part of that type — the first concrete one of a list such as `image/png, image/jpeg`, the default type for a range such as `text/*` (both warned about); for a file it is documented, and the caller sets it on the `MultipartFile` |
+
+Only models sent as a multipart body get `MultipartFile` fields: the same `format: binary` in a
+JSON schema stays a `String`. A model with files that is also used outside multipart bodies — in a
+JSON response, say — cannot carry those fields there, so the build warns: declare a separate schema
+for the multipart body.
+
+**Any other media type** (`application/octet-stream`, `text/plain`, `image/*`, ...) — the method takes
+`Object body` and sends it as it is, with a `contentType` parameter that defaults to the spec's
+media type (and is required when the spec only gives a range such as `image/*`). Pass a `String`,
+a `Uint8List` or a `Stream<List<int>>`. The same fallback, with a build warning, applies to a form
+body whose schema is not an object.
+
+### Non-JSON responses
+
+A `text/*` or XML response is requested with `ResponseType.plain` and returned as a `String`;
+any other non-JSON media type with `ResponseType.bytes`, returned as a `Uint8List`. The build logs
+one warning listing those operations.
 
 ## Aggregator: api_client.dart
 

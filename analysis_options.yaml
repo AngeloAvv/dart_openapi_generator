@@ -1,1 +1,6 @@
 include: package:lints/recommended.yaml
+
+analyzer:
+  exclude:
+    # Copied next to generated code and run by test/e2e/form_bodies_e2e_test.dart.
+    - test/e2e/driver/**

@@ -11,8 +11,10 @@ class DebugApi {
 
   /// Trace echo for debugging
   ///
+  /// Returns the `text/plain` response body as text.
+  ///
   /// Throws [DioException] on non-2xx response.
-  Future<void> traceDebug({
+  Future<String> traceDebug({
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -20,10 +22,11 @@ class DebugApi {
     ProgressCallback? onSendProgress,
     ProgressCallback? onReceiveProgress,
   }) async {
-    await _dio.request<void>(
+    final response = await _dio.request<String>(
       '/debug',
       options: Options(
         method: 'TRACE',
+        responseType: ResponseType.plain,
         headers: headers,
         extra: extra,
         validateStatus: validateStatus,
@@ -32,5 +35,10 @@ class DebugApi {
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,
     );
+    final data = response.data;
+    if (data == null) {
+      throw StateError('Expected a response body but received null.');
+    }
+    return data;
   }
 }

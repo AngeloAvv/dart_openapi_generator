@@ -5,6 +5,25 @@ info:
 servers:
   - url: "https://api.example.com/v1"
 paths:
+  /auth/session:
+    post:
+      operationId: createSession
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SessionForm'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+          description: Token response
+      summary: Sign in with a login form
+      tags:
+        - Auth
   /auth/token:
     post:
       operationId: createToken
@@ -334,6 +353,40 @@ paths:
       summary: Get notifications for a user (oneOf example)
       tags:
         - Users
+  /users/{id}/avatar:
+    put:
+      operationId: uploadAvatar
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          multipart/form-data:
+            encoding:
+              image:
+                contentType: image/png, image/jpeg
+            schema:
+              properties:
+                caption:
+                  type: string
+                image:
+                  format: binary
+                  type: string
+              required:
+                - image
+              type: object
+        required: true
+      responses:
+        "204":
+          description: Avatar stored
+      security:
+        - bearerAuth: []
+      summary: Upload the avatar of a user
+      tags:
+        - Users
   /users/{id}/metadata:
     get:
       operationId: getUserMetadata
@@ -411,6 +464,18 @@ components:
       required:
         - deviceToken
         - type
+      type: object
+    SessionForm:
+      properties:
+        password:
+          type: string
+        rememberMe:
+          type: boolean
+        username:
+          type: string
+      required:
+        - username
+        - password
       type: object
     TokenRequest:
       properties:

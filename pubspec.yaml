@@ -3,7 +3,7 @@ description: >-
   Native-Dart, OpenAPI 3.x → Dart code generator. Generates
   idiomatic Dio-based model classes and API client services via build_runner.
   No JVM. No Mustache. Generated code looks hand-written.
-version: 0.4.0
+version: 0.5.0
 repository: https://github.com/AngeloAvv/dart_openapi_generator
 homepage: https://docs.page/angeloavv/dart_openapi_generator
 issue_tracker: https://github.com/AngeloAvv/dart_openapi_generator/issues
@@ -32,5 +32,6 @@ dependencies:
 dev_dependencies:
   analyzer: ">=8.1.1 <14.0.0"
   build_test: "^3.5.15"
+  dio: "^5.9.2"
   lints: "^6.1.0"
   test: "^1.31.0"

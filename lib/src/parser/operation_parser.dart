@@ -1,3 +1,4 @@
+import '../model/media_type.dart';
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
@@ -247,24 +248,30 @@ final class OperationParser {
   ) {
     final required = raw['required'] as bool? ?? false;
     final description = raw['description'] as String?;
-    final content = raw['content'] as Map?;
+    final content = raw['content'] as Map? ?? const {};
 
-    SchemaObject? jsonSchema;
-    if (content != null) {
-      final jsonContent = content['application/json'] as Map?;
-      final schemaRaw = jsonContent?['schema'];
-      if (schemaRaw is Map && schemaRaw.isNotEmpty) {
-        jsonSchema = _schemaParser.parse(
-          Map<String, dynamic>.from(schemaRaw),
-          '$pointer/content/application~1json/schema',
-        );
-      }
-    }
+    final mediaType = selectMediaType(content.keys.map((k) => k.toString()));
+    final mediaTypeObject = content[mediaType] as Map?;
+    // Only the kinds the generator types need a schema; the schema of any
+    // other media type (XML, binary, ...) never reaches the generated code.
+    final typed = switch (mediaType == null
+        ? null
+        : classifyMediaType(mediaType)) {
+      MediaTypeKind.json ||
+      MediaTypeKind.formUrlEncoded ||
+      MediaTypeKind.multipart => true,
+      _ => false,
+    };
 
     return RequestBodyObject(
       description: description,
       required: required,
-      jsonSchema: jsonSchema,
+      mediaType: mediaType,
+      schema:
+          typed
+              ? _parseContentSchema(mediaTypeObject, mediaType!, pointer)
+              : null,
+      encoding: _parseEncoding(mediaTypeObject?['encoding']),
     );
   }
 
@@ -274,25 +281,56 @@ final class OperationParser {
     String pointer,
   ) {
     final description = raw['description'] as String?;
-    final content = raw['content'] as Map?;
+    final content = raw['content'] as Map? ?? const {};
 
-    SchemaObject? jsonSchema;
-    if (content != null) {
-      final jsonContent = content['application/json'] as Map?;
-      final schemaRaw = jsonContent?['schema'];
-      if (schemaRaw is Map && schemaRaw.isNotEmpty) {
-        jsonSchema = _schemaParser.parse(
-          Map<String, dynamic>.from(schemaRaw),
-          '$pointer/content/application~1json/schema',
-        );
-      }
-    }
+    final mediaType = selectMediaType(content.keys.map((k) => k.toString()));
+    final isJson =
+        mediaType != null && classifyMediaType(mediaType) == MediaTypeKind.json;
 
     return ResponseObject(
       statusCode: statusCode,
       description: description,
-      jsonSchema: jsonSchema,
+      mediaType: mediaType,
+      schema:
+          isJson
+              ? _parseContentSchema(
+                content[mediaType] as Map?,
+                mediaType,
+                pointer,
+              )
+              : null,
     );
+  }
+
+  /// Parses the `schema` of the Media Type Object [mediaTypeObject], found
+  /// under `content[mediaType]` of the object at [pointer]. An absent or empty
+  /// schema yields null.
+  SchemaObject? _parseContentSchema(
+    Map? mediaTypeObject,
+    String mediaType,
+    String pointer,
+  ) {
+    final schemaRaw = mediaTypeObject?['schema'];
+    if (schemaRaw is! Map || schemaRaw.isEmpty) return null;
+    return _schemaParser.parse(
+      Map<String, dynamic>.from(schemaRaw),
+      '$pointer/content/${_encodePointerSegment(mediaType)}/schema',
+    );
+  }
+
+  Map<String, EncodingObject> _parseEncoding(Object? raw) {
+    if (raw is! Map) return const {};
+    return {
+      for (final MapEntry(:key, :value) in raw.entries)
+        if (value is Map)
+          key.toString(): EncodingObject(
+            contentType: value['contentType'] as String?,
+            style: value['style'] as String?,
+            explode: value['explode'] as bool?,
+            allowReserved: value['allowReserved'] as bool? ?? false,
+            hasHeaders: value['headers'] is Map,
+          ),
+    };
   }
 
   List<String> _parseSecurity(List? securityList) {

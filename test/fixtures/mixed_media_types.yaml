@@ -1,0 +1,205 @@
+openapi: 3.0.3
+info:
+  title: Mixed media types
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      tags: [Pets]
+      description: JSON wins over the form kinds and XML.
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema:
+              $ref: '#/components/schemas/Pet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Pet'
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pet'
+      responses:
+        '200':
+          description: Created
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Pet'
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        '422':
+          description: Invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /pets/{id}/form:
+    put:
+      operationId: updatePetForm
+      tags: [Pets]
+      description: url-encoded wins over multipart.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Pet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Pet'
+      responses:
+        '204':
+          description: Updated
+  /pets/{id}/charset:
+    patch:
+      operationId: patchPet
+      tags: [Pets]
+      description: JSON media types with parameters and structured suffixes.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: '#/components/schemas/Pet'
+      responses:
+        '200':
+          description: Patched
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Pet'
+  /pets/{id}/photo:
+    put:
+      operationId: uploadPhoto
+      tags: [Pets]
+      description: A binary upload, any image type.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          image/*:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Stored
+    get:
+      operationId: downloadPhoto
+      tags: [Pets]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The photo
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+  /pets/{id}/notes:
+    put:
+      operationId: putNotes
+      tags: [Pets]
+      description: A text body, only optional.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          text/plain:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: The notes, as stored
+          content:
+            text/plain:
+              schema:
+                type: string
+  /pets/export:
+    get:
+      operationId: exportPets
+      tags: [Pets]
+      responses:
+        '200':
+          description: A CSV export
+          content:
+            text/csv:
+              schema:
+                type: string
+  /pets/import:
+    post:
+      operationId: importPets
+      tags: [Pets]
+      description: A form body whose schema is not an object.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: array
+              items:
+                type: string
+      responses:
+        '204':
+          description: Imported
+  /pets/ping:
+    post:
+      operationId: pingPets
+      tags: [Pets]
+      description: A JSON body and a JSON response without a schema.
+      requestBody:
+        content:
+          application/json: {}
+      responses:
+        '200':
+          description: Pong
+          content:
+            application/json: {}
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        age:
+          type: integer
+    Problem:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: integer

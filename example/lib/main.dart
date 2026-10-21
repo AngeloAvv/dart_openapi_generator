@@ -20,6 +20,13 @@ void main() {
   // await client.users.getUser('user-id');
   // await client.users.createUser(User(id: '1', name: 'Alice', email: 'alice@example.com'));
   // await client.auth.createToken(TokenRequest(username: 'alice', password: 'secret'));
+  // Sent as application/x-www-form-urlencoded:
+  // await client.auth.createSession(SessionForm(username: 'alice', password: 'secret'));
+  // Sent as multipart/form-data, the file as one part:
+  // await client.users.uploadAvatar(
+  //   'user-id',
+  //   UploadAvatarRequest(image: await MultipartFile.fromFile('avatar.png')),
+  // );
   // await client.categories.listCategories();
 
   // Other available auth factories (generated from securitySchemes in the spec):

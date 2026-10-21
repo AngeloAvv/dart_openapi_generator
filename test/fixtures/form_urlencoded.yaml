@@ -1,0 +1,174 @@
+openapi: 3.0.3
+info:
+  title: Form bodies
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /sessions:
+    post:
+      operationId: signIn
+      tags: [Forms]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SignInBody'
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /profile:
+    post:
+      operationId: updateProfile
+      tags: [Forms]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ProfileForm'
+            encoding:
+              ids:
+                style: form
+                explode: false
+              labels:
+                style: pipeDelimited
+              address:
+                style: deepObject
+      responses:
+        '204':
+          description: Updated
+  /feedback:
+    post:
+      operationId: sendFeedback
+      tags: [Forms]
+      description: Optional, inline form body.
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                rating:
+                  type: integer
+      responses:
+        '204':
+          description: Sent
+  /filters:
+    post:
+      operationId: saveFilters
+      tags: [Forms]
+      description: Every unsupported serialization, each one warned about.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                range:
+                  $ref: '#/components/schemas/Range'
+                ranges:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Range'
+                query:
+                  type: string
+            encoding:
+              query:
+                allowReserved: true
+                contentType: text/plain
+      responses:
+        '204':
+          description: Saved
+  /settings:
+    put:
+      operationId: putSettings
+      tags: [Forms]
+      description: An optional, free-form form body.
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties:
+                type: string
+      responses:
+        '204':
+          description: Stored
+components:
+  schemas:
+    SignInBody:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+        remember:
+          type: boolean
+    Role:
+      type: string
+      enum: [admin, member]
+    Address:
+      type: object
+      properties:
+        city:
+          type: string
+        zip:
+          type: string
+    Range:
+      type: object
+      properties:
+        from:
+          type: integer
+        to:
+          type: integer
+    ProfileForm:
+      type: object
+      required: [name, age, admin, born, role, tags]
+      properties:
+        name:
+          type: string
+        age:
+          type: integer
+        score:
+          type: number
+        admin:
+          type: boolean
+        born:
+          type: string
+          format: date-time
+        role:
+          $ref: '#/components/schemas/Role'
+        nickname:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        ids:
+          type: array
+          items:
+            type: integer
+        labels:
+          type: array
+          items:
+            type: string
+        address:
+          $ref: '#/components/schemas/Address'
+    Session:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string

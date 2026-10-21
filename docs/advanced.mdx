@@ -257,6 +257,39 @@ setUpAll(() {
 
 ---
 
+## Multipart Requests and Retrying Interceptors
+
+A generated method that sends a `multipart/form-data` body builds a new `FormData` on every call,
+and clones every `MultipartFile` it is given — calling the method twice with the same body works.
+
+An interceptor that sends the *same request* again is a different matter: a `FormData` can be sent
+only once, and `RequestOptions.data` still holds the one already sent. A token refresh or a retry
+interceptor has to send a copy:
+
+```dart
+class RetryOnUnauthorized extends Interceptor {
+  RetryOnUnauthorized(this._dio);
+
+  final Dio _dio;
+
+  @override
+  Future<void> onError(
+    DioException err,
+    ErrorInterceptorHandler handler,
+  ) async {
+    if (err.response?.statusCode != 401) return handler.next(err);
+    final options = err.requestOptions;
+    // await refreshToken(); ...
+    if (options.data case final FormData data) options.data = data.clone();
+    handler.resolve(await _dio.fetch<dynamic>(options));
+  }
+}
+```
+
+Every generated multipart method states this in its dartdoc.
+
+---
+
 ## Supported OpenAPI Features
 
 ### Schemas
@@ -292,7 +325,13 @@ setUpAll(() {
 | `in: querystring` parameters (OpenAPI 3.2) | Supported — treated identically to `in: query` |
 | `in: header` parameters | Supported (optional `String?` named params merged at runtime) |
 | `in: cookie` parameters | Not emitted — a warning is logged; use Dio interceptors instead |
-| `requestBody` with `application/json` content | Supported |
+| `requestBody` with a JSON media type (`application/json`, `; charset=…`, `*/*+json`) | Supported — typed `body` |
+| `requestBody` with `application/x-www-form-urlencoded` content | Supported — typed `body`, url-encoded (see [Generated Code](/generated-code#request-bodies)) |
+| `requestBody` with `multipart/form-data` content | Supported — typed `body`, encoded into a new `FormData` per call; binary properties are `MultipartFile`s |
+| `requestBody` with any other media type | `Object body` sent as-is with a `contentType` parameter; a warning is logged |
+| Several media types on one body or response | JSON → url-encoded → multipart → first declared |
+| `text/*` and XML responses | Returned as `String` |
+| Other non-JSON responses (`application/octet-stream`, `image/png`, ...) | Returned as `Uint8List` |
 | `requestBody` on GET/HEAD/OPTIONS | Not sent (HTTP semantics); a warning is logged |
 | Inline request body schemas | Supported — named `<OperationId>Request` |
 | Inline response schemas | Supported — named `<OperationId>Response` |
@@ -353,7 +392,8 @@ rename one schema or operation in the spec.
 - **Per-field `date_time_converter` overrides are not supported.** The setting applies globally.
 - **`oneOf` wrappers and generated enums cannot be mocked.** `model_class_modifier` does not reach them: wrappers are `sealed` (which is what makes `switch` over the union exhaustive) and enums can never be implemented. Use `provideDummy` — see [Testing](#testing).
 - **No `webhooks` or root-level `pathItems` (OpenAPI 3.1/3.2).** Only `paths` and `components/schemas` are processed.
-- **Only `application/json` request/response bodies.** Multipart, form-encoded, and other content types are not generated.
+- **Some form encodings are approximated.** In an `application/x-www-form-urlencoded` body, an object property is always sent in bracket notation (`deepObject`) and `allowReserved` is ignored; per-part `headers` of a multipart body are not generated. Each case is a build warning.
+- **Request bodies and responses outside JSON and forms are untyped.** Any other request media type is an `Object body`; a non-JSON response is a `String` or a `Uint8List`.
 
 ---
 

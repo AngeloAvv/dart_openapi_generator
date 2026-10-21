@@ -1,0 +1,37 @@
+openapi: 3.1.0
+info:
+  title: Multipart files, OpenAPI 3.1
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /avatars:
+    post:
+      operationId: uploadAvatar
+      tags: [Avatars]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  contentMediaType: image/png
+                previews:
+                  type: array
+                  items:
+                    type: string
+                    contentMediaType: image/jpeg
+                signature:
+                  description: Base64 text, not a file.
+                  type: string
+                  contentMediaType: image/png
+                  contentEncoding: base64
+                caption:
+                  type: [string, 'null']
+      responses:
+        '204':
+          description: Uploaded

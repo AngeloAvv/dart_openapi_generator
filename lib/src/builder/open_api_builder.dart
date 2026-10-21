@@ -81,6 +81,7 @@ final class OpenApiBuilder implements Builder {
       registry,
       layout,
       onWarning: onWarning,
+      dateTimeConverter: config.dateTimeConverter,
     ).generate(parseResult.document);
     final aggregatorFiles = AggregatorGenerator(
       onWarning: onWarning,

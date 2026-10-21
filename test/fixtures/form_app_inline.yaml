@@ -1,0 +1,62 @@
+openapi: 3.0.3
+info:
+  title: Bookmarks, inline bodies
+  description: The same kind of app without operationIds and with inline form bodies.
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /login:
+    post:
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /preview:
+    post:
+      tags: [Links]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+      responses:
+        '200':
+          description: The preview of the link
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preview'
+components:
+  schemas:
+    Session:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    Preview:
+      type: object
+      properties:
+        title:
+          type: string

@@ -74,7 +74,7 @@ void main() {
     });
 
     test('inline request body schema named <OperationId>Request (NAME-04)', () {
-      // An operation with operationId 'createPet' and a jsonSchema requestBody
+      // An operation with operationId 'createPet' and a schema requestBody
       // produces a schema registered under the name 'CreatePetRequest'.
       final requestSchema = const ObjectSchema(properties: [], required: []);
       final doc = SpecDocument(
@@ -90,8 +90,7 @@ void main() {
             parameters: const [],
             requestBody: RequestBodyObject(
               required: true,
-              jsonSchema:
-                  requestSchema, // NOTE: uses jsonSchema, not content map
+              schema: requestSchema, // NOTE: uses schema, not content map
             ),
             responses: const {},
             tags: const [],
