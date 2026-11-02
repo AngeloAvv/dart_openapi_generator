@@ -783,6 +783,127 @@ void main() {
     });
   });
 
+  group('ModelGenerator — composite list items and map values', () {
+    // Regression: items of a named oneOf/allOf were emitted as-is, so a
+    // List<Shape> decoded with `.cast<Shape>()` — it compiles, then throws
+    // `_Map<String, dynamic> is not a subtype of Shape` on element access.
+    SpecDocument docWith(SchemaObject property) => _makeDoc(
+      schemas: {
+        'Circle': _circle,
+        'Shape': _shape,
+        'Square': _square,
+        'Drawing': ObjectSchema(
+          name: 'Drawing',
+          properties: [
+            SchemaProperty(
+              specName: 'shapes',
+              schema: property,
+              isRequired: true,
+            ),
+          ],
+          required: const ['shapes'],
+        ),
+      },
+    );
+
+    test('a list of a oneOf decodes each item with fromJson', () {
+      final src = _source(
+        docWith(const ArraySchema(items: _shape)),
+        'models/drawing.dart',
+      );
+
+      expect(src, contains('final List<Shape> shapes;'));
+      expect(
+        src,
+        contains('.map((e) => Shape.fromJson(e as Map<String, dynamic>))'),
+      );
+      expect(src, isNot(contains('.cast<Shape>()')));
+    });
+
+    test('a list of lists of a oneOf decodes the inner items', () {
+      final src = _source(
+        docWith(const ArraySchema(items: ArraySchema(items: _shape))),
+        'models/drawing.dart',
+      );
+
+      expect(src, contains('Shape.fromJson(e as Map<String, dynamic>)'));
+      expect(src, isNot(contains('.cast<Shape>()')));
+    });
+
+    test('a list of an allOf decodes each item with fromJson', () {
+      const combined = AllOfSchema(name: 'Combined', schemas: [_circle]);
+      final doc = _makeDoc(
+        schemas: {
+          'Circle': _circle,
+          'Combined': combined,
+          'Drawing': const ObjectSchema(
+            name: 'Drawing',
+            properties: [
+              SchemaProperty(
+                specName: 'items',
+                schema: ArraySchema(items: combined),
+                isRequired: true,
+              ),
+            ],
+            required: ['items'],
+          ),
+        },
+      );
+      final src = _source(doc, 'models/drawing.dart');
+
+      expect(src, contains('Combined.fromJson(e as Map<String, dynamic>)'));
+      expect(src, isNot(contains('.cast<Combined>()')));
+    });
+
+    test('map values of a oneOf decode with fromJson', () {
+      final doc = _makeDoc(
+        schemas: {
+          'Circle': _circle,
+          'Shape': _shape,
+          'Square': _square,
+          'Layers': const ObjectSchema(
+            name: 'Layers',
+            properties: [],
+            required: [],
+            additionalProperties: _shape,
+          ),
+        },
+      );
+      final src = _source(doc, 'models/layers.dart');
+
+      expect(src, contains('Shape.fromJson(v as Map<String, dynamic>)'));
+    });
+
+    test('items of a union with a non-object branch are passed uncast', () {
+      // A polymorphic union's fromJson takes Object?: an item may be a list.
+      const pointsResponse = OneOfSchema(
+        name: 'PointsResponse',
+        variants: [_paged, ArraySchema(items: _point)],
+      );
+      final doc = _makeDoc(
+        schemas: {
+          'Point': _point,
+          'Paged': _paged,
+          'PointsResponse': pointsResponse,
+          'Pages': const ObjectSchema(
+            name: 'Pages',
+            properties: [
+              SchemaProperty(
+                specName: 'pages',
+                schema: ArraySchema(items: pointsResponse),
+                isRequired: true,
+              ),
+            ],
+            required: ['pages'],
+          ),
+        },
+      );
+      final src = _source(doc, 'models/pages.dart');
+
+      expect(src, contains('.map((e) => PointsResponse.fromJson(e))'));
+    });
+  });
+
   group('ModelGenerator — model_class_modifier', () {
     SpecDocument mixedDoc() => _makeDoc(
       schemas: {

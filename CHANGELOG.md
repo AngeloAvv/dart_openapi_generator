@@ -5,6 +5,12 @@ All notable changes to `dart_openapi_generator` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Lists and maps of `oneOf`/`allOf` schemas are decoded element by element.** An array whose items are a named `oneOf` or `allOf` (and an `additionalProperties` map whose values are one) emitted its items as-is, so a `List<Shape>` was decoded with `(json['shapes'] as List<dynamic>).cast<Shape>()`. That compiles and even survives `fromJson`, because `cast` is lazy, then throws `_Map<String, dynamic> is not a subtype of Shape` on the first element access. Items are now decoded with `Shape.fromJson(e as Map<String, dynamic>)`, also inside nested lists. A union with a non-object branch takes its item uncast, since its `fromJson` accepts `Object?`, and an `allOf` wrapping a single enum casts to the enum's primitive type, as single fields already did. Specs without such lists or maps generate byte-identical output.
+
 ## [0.5.0] - 2026-10-21
 
 ### Added

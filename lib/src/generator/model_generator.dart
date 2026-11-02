@@ -1453,8 +1453,42 @@ final class ModelGenerator {
         varName,
       ),
       ArraySchema() => _nestedArrayFromJson(schema, varName),
+      AllOfSchema() when schema.name != null => _allOfFromJsonVar(
+        schema,
+        varName,
+      ),
+      OneOfSchema() when schema.name != null => _oneOfFromJsonVar(
+        schema,
+        varName,
+      ),
       _ => varName, // primitive or unrecognized — emit as-is
     };
+  }
+
+  String _allOfFromJsonVar(AllOfSchema schema, String varName) {
+    final cls = _registry.dartClassName(schema.name!);
+    // Single-ref wrapper: resolved schema may be an enum (cast to primitive, not Map)
+    if (schema.schemas.length == 1 && schema.schemas.first is EnumSchema) {
+      final resolved = schema.schemas.first as EnumSchema;
+      final castType =
+          resolved.enumType == 'integer'
+              ? 'int'
+              : resolved.enumType == 'number'
+              ? 'double'
+              : 'String';
+      return '$cls.fromJson($varName as $castType)';
+    }
+    return '$cls.fromJson($varName as Map<String, dynamic>)';
+  }
+
+  String _oneOfFromJsonVar(OneOfSchema schema, String varName) {
+    final cls = _registry.dartClassName(schema.name!);
+    // A union with a non-object branch takes Object?: the item may be a list
+    // or a primitive, so it must not be cast to a Map.
+    if (_layout.oneOfPlan.isPolymorphic(schema.name!)) {
+      return '$cls.fromJson($varName)';
+    }
+    return '$cls.fromJson($varName as Map<String, dynamic>)';
   }
 
   String _primitiveFromJsonVar(PrimitiveSchema schema, String varName) {
