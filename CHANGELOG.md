@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Parameters declared as `$ref` to `#/components/parameters/*` no longer fail to parse.** Every entry of `parameters` was read as an inline Parameter Object, so a Reference Object such as `{ $ref: '#/components/parameters/TenantId' }` stopped the build with `Parameter at index 0 is missing required "name" field.` Operation-level and path-level references are now resolved, and the generated code is identical to the one produced with the component inlined. A reference to a component that does not exist, an external reference and a circular chain of references are reported as parse errors pointing at the reference.
+- **Multi-line descriptions no longer break the generated services.** A parameter `description` with a line break was written with the `///` prefix on its first line only, so the rest landed in the file as bare text and `dart_style` aborted the build with "Expected to find ';'". Parameter descriptions now share one helper with operation descriptions: every line is a doc line, blank lines become `///`, and `\r\n` line endings are handled. An operation `summary` with a line break is split the same way. ([#19](https://github.com/AngeloAvv/dart_openapi_generator/issues/19))
 
 ## [0.5.0] - 2026-10-21
 

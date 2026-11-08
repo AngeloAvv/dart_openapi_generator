@@ -358,12 +358,10 @@ final class ServiceGenerator {
           op.summary ??
           op.operationId ??
           '${op.method.toUpperCase()} ${op.path}';
-      m.docs.add('/// $docTitle');
+      m.docs.addAll(_docLines(docTitle));
       if (op.description != null && op.description != op.summary) {
         m.docs.add('///');
-        for (final line in op.description!.split('\n')) {
-          m.docs.add('/// $line');
-        }
+        m.docs.addAll(_docLines(op.description!));
       }
       final paramsWithDesc =
           [...pathParams, ...queryParams, ...headerParams]
@@ -374,7 +372,7 @@ final class ServiceGenerator {
         m.docs.add('/// Parameters:');
         for (final p in paramsWithDesc) {
           final dartParamName = escapeKeyword(toLowerCamelCase(p.name));
-          m.docs.add('/// - [$dartParamName] ${p.description}');
+          m.docs.addAll(_docLines('- [$dartParamName] ${p.description}'));
         }
       }
       final responseDoc = switch (responseKind) {
@@ -1658,6 +1656,14 @@ final class ServiceGenerator {
   /// How build warnings name [op].
   String _opLabel(OperationItem op) =>
       op.operationId ?? '${op.method} ${op.path}';
+
+  /// Turns free-form spec [text] into dartdoc lines: every line of [text]
+  /// gets the `///` prefix, so a description with line breaks cannot leave
+  /// bare text in the generated file. Blank lines become a bare `///`.
+  List<String> _docLines(String text) => [
+    for (final line in text.split(RegExp(r'\r\n|\r|\n')))
+      line.trimRight().isEmpty ? '///' : '/// ${line.trimRight()}',
+  ];
 
   /// Splits [paragraph] into dartdoc lines that fit in 80 columns once
   /// indented and prefixed with `/// ` (6 characters).
