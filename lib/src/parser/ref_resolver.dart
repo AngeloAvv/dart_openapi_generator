@@ -39,14 +39,7 @@ final class RefResolver {
   ///   - [ref] does not start with `'#/'` (external refs are unsupported in v0.1.0)
   ///   - The pointed-to location does not exist in the document
   SchemaObject resolve(String ref, String callerPointer) {
-    if (!ref.startsWith('#/')) {
-      throw OpenApiParseException(
-        'External \$ref is not supported in v0.1.0 (planned for v0.2.x): "$ref". '
-        'Only same-document references starting with "#/" are supported.',
-        jsonPointer: callerPointer,
-        sourceSpan: _sourceMap.spanAt(callerPointer),
-      );
-    }
+    _requireSameDocument(ref, callerPointer);
 
     // Convert '#/components/schemas/Foo' → '/components/schemas/Foo'
     final pointer = ref.substring(1);
@@ -78,6 +71,28 @@ final class RefResolver {
       return schema;
     } finally {
       _inProgress.remove(pointer);
+    }
+  }
+
+  /// Resolves [ref] to the raw (unparsed) object it points at, for Reference
+  /// Objects that are not schemas — e.g. `#/components/parameters/TenantId`.
+  ///
+  /// Throws [OpenApiParseException] if [ref] is not a same-document reference
+  /// or its target does not exist or is not a map. The error points at
+  /// [callerPointer], the location of the Reference Object.
+  Map<String, dynamic> resolveObject(String ref, String callerPointer) {
+    _requireSameDocument(ref, callerPointer);
+    return _navigateTo(ref.substring(1), callerPointer);
+  }
+
+  void _requireSameDocument(String ref, String callerPointer) {
+    if (!ref.startsWith('#/')) {
+      throw OpenApiParseException(
+        'External \$ref is not supported in v0.1.0 (planned for v0.2.x): "$ref". '
+        'Only same-document references starting with "#/" are supported.',
+        jsonPointer: callerPointer,
+        sourceSpan: _sourceMap.spanAt(callerPointer),
+      );
     }
   }
 
@@ -116,7 +131,7 @@ final class RefResolver {
 
     if (current is! Map) {
       throw OpenApiParseException(
-        '\$ref target "#$pointer" must be a schema object (map), '
+        '\$ref target "#$pointer" must be an object (map), '
         'but found ${current.runtimeType}.',
         jsonPointer: callerPointer,
         sourceSpan: _sourceMap.spanAt(callerPointer),

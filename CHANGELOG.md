@@ -5,6 +5,12 @@ All notable changes to `dart_openapi_generator` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Parameters declared as `$ref` to `#/components/parameters/*` no longer fail to parse.** Every entry of `parameters` was read as an inline Parameter Object, so a Reference Object such as `{ $ref: '#/components/parameters/TenantId' }` stopped the build with `Parameter at index 0 is missing required "name" field.` Operation-level and path-level references are now resolved, and the generated code is identical to the one produced with the component inlined. A reference to a component that does not exist, an external reference and a circular chain of references are reported as parse errors pointing at the reference.
+
 ## [0.5.0] - 2026-10-21
 
 ### Added
