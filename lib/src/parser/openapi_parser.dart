@@ -45,7 +45,11 @@ final class OpenApiParser {
     // --- (2) Build parser stack ---
     final refResolver = RefResolver(rawMap, sourceMap);
     final schemaParser = SchemaParser(sourceMap, refResolver);
-    final operationParser = OperationParser(sourceMap, schemaParser);
+    final operationParser = OperationParser(
+      sourceMap,
+      schemaParser,
+      refResolver,
+    );
 
     // --- (3) Resolve component schemas ---
     final schemas = <String, dynamic>{};

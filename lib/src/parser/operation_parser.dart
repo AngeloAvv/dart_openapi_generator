@@ -2,6 +2,7 @@ import '../model/media_type.dart';
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
+import 'ref_resolver.dart';
 import 'schema_parser.dart';
 import 'source_map.dart';
 
@@ -47,8 +48,9 @@ const _kPathItemMetadataKeys = {
 final class OperationParser {
   final SourceMap _sourceMap;
   final SchemaParser _schemaParser;
+  final RefResolver _refResolver;
 
-  const OperationParser(this._sourceMap, this._schemaParser);
+  const OperationParser(this._sourceMap, this._schemaParser, this._refResolver);
 
   /// Parses [paths] map (raw `paths:` object) into [OperationItem] list.
   ///
@@ -171,8 +173,26 @@ final class OperationParser {
     for (var i = 0; i < rawList.length; i++) {
       final raw = rawList[i];
       if (raw is! Map) continue;
-      final paramMap = Map<String, dynamic>.from(raw);
-      final paramPointer = '$pointer/parameters/$i';
+      var paramMap = Map<String, dynamic>.from(raw);
+      var paramPointer = '$pointer/parameters/$i';
+
+      // A Reference Object (`$ref: '#/components/parameters/X'`) stands for the
+      // Parameter Object it points at. Follow the chain (a component may itself
+      // be a reference), so everything below reads the real parameter and
+      // reports errors at its true location.
+      final visited = <String>{};
+      while (paramMap[r'$ref'] is String) {
+        final ref = paramMap[r'$ref'] as String;
+        if (!visited.add(ref)) {
+          throw OpenApiParseException(
+            'Circular \$ref chain while resolving parameter: "$ref".',
+            jsonPointer: paramPointer,
+            sourceSpan: _sourceMap.spanAt(paramPointer),
+          );
+        }
+        paramMap = _refResolver.resolveObject(ref, paramPointer);
+        paramPointer = ref;
+      }
 
       final name = paramMap['name'] as String?;
       if (name == null) {
