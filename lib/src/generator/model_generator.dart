@@ -1308,6 +1308,9 @@ final class ModelGenerator {
       EnumSchema() when schema.name != null => _registry.dartClassName(
         schema.name!,
       ),
+      // An enum no property owns (an additionalProperties value, a oneOf
+      // variant's property...) has no class: its wire type is all there is.
+      EnumSchema() => _enumWireType(schema),
       AllOfSchema() when schema.name != null => _registry.dartClassName(
         schema.name!,
       ),
@@ -1419,8 +1422,25 @@ final class ModelGenerator {
       return '$cls.fromJson($jsonAccess as Map<String, dynamic>)';
     }
 
+    if (schema is EnumSchema) {
+      return _enumWireFromJson(schema, jsonAccess);
+    }
+
     return '$jsonAccess as dynamic';
   }
+
+  /// Dart type of the wire value of [schema]: the type of an inline enum that
+  /// has no generated class.
+  String _enumWireType(EnumSchema schema) => switch (schema.enumType) {
+    'integer' => 'int',
+    'number' => 'double',
+    _ => 'String',
+  };
+
+  String _enumWireFromJson(EnumSchema schema, String access) =>
+      schema.enumType == 'number'
+          ? '($access as num).toDouble()'
+          : '$access as ${_enumWireType(schema)}';
 
   String _primitiveFromJson(PrimitiveSchema schema, String jsonAccess) {
     if (schema.primitiveType == 'string' && schema.format == 'date-time') {
@@ -1452,6 +1472,7 @@ final class ModelGenerator {
         schema,
         varName,
       ),
+      EnumSchema() => _enumWireFromJson(schema, varName),
       ArraySchema() => _nestedArrayFromJson(schema, varName),
       _ => varName, // primitive or unrecognized — emit as-is
     };
