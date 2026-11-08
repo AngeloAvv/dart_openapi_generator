@@ -27,7 +27,7 @@ dependencies:
   dio: ^5.0.0
 
 dev_dependencies:
-  dart_openapi_generator: ^0.5.0
+  dart_openapi_generator: ^0.6.0
   build_runner: ^2.4.0
 ```
 
