@@ -232,6 +232,16 @@ special characters (spaces, hyphens, leading digits) are sanitized to valid came
 identifiers. If sanitization produces a duplicate identifier, generation fails with a clear
 error asking you to rename the conflicting values in the spec.
 
+### Inline enums
+
+An `enum` declared inline on a property gets its own enum class, named after the owner and
+the property: `Ticket.status` becomes `TicketStatus`, and the property is typed with it, as
+if the enum were a component referenced with `$ref`. The same goes for inline request and
+response bodies (`CreateTicketRequest.severity` → `CreateTicketRequestSeverity`) and for the
+items of an array (`List<TicketLabels>`). If a component already has that name, a counter is
+appended (`TicketKind2`). An inline enum that no property can name (a parameter, an
+`additionalProperties` value) is typed with its wire type: `String`, `int` or `double`.
+
 ## Model: allOf
 
 For an OpenAPI `allOf` schema, the generator merges all `object` members into a single flat

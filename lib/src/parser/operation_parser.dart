@@ -2,6 +2,7 @@ import '../model/media_type.dart';
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
 import '../model/spec_document.dart';
+import 'operation_naming.dart';
 import 'ref_resolver.dart';
 import 'schema_parser.dart';
 import 'source_map.dart';
@@ -134,6 +135,7 @@ final class OperationParser {
       requestBody = _parseRequestBody(
         Map<String, dynamic>.from(requestBodyRaw),
         '$pointer/requestBody',
+        '${operationBaseName(operationId, method, path)}Request',
       );
     }
 
@@ -147,6 +149,8 @@ final class OperationParser {
         Map<String, dynamic>.from(responseRaw),
         statusCode.toString(),
         responsePointer,
+        '${operationBaseName(operationId, method, path)}'
+        '${responseSuffix(statusCode.toString())}',
       );
     });
 
@@ -265,6 +269,7 @@ final class OperationParser {
   RequestBodyObject _parseRequestBody(
     Map<String, dynamic> raw,
     String pointer,
+    String owner,
   ) {
     final required = raw['required'] as bool? ?? false;
     final description = raw['description'] as String?;
@@ -289,7 +294,7 @@ final class OperationParser {
       mediaType: mediaType,
       schema:
           typed
-              ? _parseContentSchema(mediaTypeObject, mediaType!, pointer)
+              ? _parseContentSchema(mediaTypeObject, mediaType!, pointer, owner)
               : null,
       encoding: _parseEncoding(mediaTypeObject?['encoding']),
     );
@@ -299,6 +304,7 @@ final class OperationParser {
     Map<String, dynamic> raw,
     String statusCode,
     String pointer,
+    String owner,
   ) {
     final description = raw['description'] as String?;
     final content = raw['content'] as Map? ?? const {};
@@ -317,6 +323,7 @@ final class OperationParser {
                 content[mediaType] as Map?,
                 mediaType,
                 pointer,
+                owner,
               )
               : null,
     );
@@ -325,16 +332,21 @@ final class OperationParser {
   /// Parses the `schema` of the Media Type Object [mediaTypeObject], found
   /// under `content[mediaType]` of the object at [pointer]. An absent or empty
   /// schema yields null.
+  ///
+  /// [owner] is the name an inline schema gets as a model (`<Base>Request`,
+  /// `<Base>Response`), which prefixes the enums hoisted out of its properties.
   SchemaObject? _parseContentSchema(
     Map? mediaTypeObject,
     String mediaType,
     String pointer,
+    String owner,
   ) {
     final schemaRaw = mediaTypeObject?['schema'];
     if (schemaRaw is! Map || schemaRaw.isEmpty) return null;
     return _schemaParser.parse(
       Map<String, dynamic>.from(schemaRaw),
       '$pointer/content/${_encodePointerSegment(mediaType)}/schema',
+      owner: owner,
     );
   }
 

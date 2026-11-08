@@ -1,0 +1,106 @@
+openapi: 3.0.3
+info:
+  title: Tickets
+  version: 1.0.0
+paths:
+  /tickets:
+    get:
+      tags: [Tickets]
+      operationId: listTickets
+      parameters:
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        '200':
+          description: Tickets, wrapped.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [kind]
+                properties:
+                  kind:
+                    type: string
+                    enum: [page, cursor]
+    post:
+      tags: [Tickets]
+      operationId: createTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [severity]
+              properties:
+                severity:
+                  type: integer
+                  enum: [1, 2, 3]
+      responses:
+        '201':
+          description: The ticket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+  /tickets/{ticketId}:
+    get:
+      tags: [Tickets]
+      operationId: getTicket
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The ticket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+components:
+  schemas:
+    Ticket:
+      type: object
+      required: [id, status, priority]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [open]
+        priority:
+          type: string
+          enum: [low, high]
+        resolution:
+          type: string
+          enum: [fixed, wont_fix]
+        labels:
+          type: array
+          items:
+            type: string
+            enum: [bug, feature]
+        severity:
+          type: string
+          nullable: true
+          enum: [minor, major]
+        # An enum component already owns the name `TicketKind`.
+        kind:
+          type: string
+          enum: [incident, request]
+    TicketKind:
+      type: string
+      enum: [incident, request, change]
+    Archived:
+      allOf:
+        - $ref: '#/components/schemas/Ticket'
+        - type: object
+          properties:
+            reason:
+              type: string
+              enum: [duplicate, obsolete]

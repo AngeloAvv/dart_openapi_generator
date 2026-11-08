@@ -1,5 +1,6 @@
 import '../model/openapi_parse_exception.dart';
 import '../model/schema_object.dart';
+import '../name_registry/name_converter.dart';
 import 'ref_resolver.dart';
 import 'source_map.dart';
 
@@ -21,34 +22,68 @@ import 'source_map.dart';
 ///   - 3.1/3.2: `type: [T, 'null']` → `isNullable: true`, extract T as effective type
 ///   - Both present simultaneously → throw [OpenApiParseException]
 ///
+/// Inline enums:
+///   An `enum` declared inline on a property of a named (or body-owned) object
+///   is hoisted into a named [EnumSchema] called `<Owner><Property>` (e.g.
+///   `TicketStatus`), so it is generated as an enum class exactly like a
+///   `$ref` to a component enum. The hoisted schemas are exposed through
+///   [hoistedEnums]; the caller registers them next to the component schemas.
+///
 /// One instance per parse invocation. Holds a [RefResolver] for `$ref` delegation.
 final class SchemaParser {
   final SourceMap _sourceMap;
   final RefResolver _refResolver;
 
-  SchemaParser(this._sourceMap, this._refResolver) {
+  /// Hoisted enums by their `<Owner>.<property>` key, so that a schema parsed
+  /// twice (once as a component, once through a `$ref`) hoists once.
+  final _hoistedByKey = <String, EnumSchema>{};
+
+  /// Every hoisted enum by its spec name.
+  final _hoisted = <String, EnumSchema>{};
+
+  /// PascalCase forms of every name taken so far (a component schema or an
+  /// earlier hoisted enum): two spec names with the same PascalCase form would
+  /// be the same Dart class.
+  final Set<String> _takenClassNames;
+
+  /// [reservedNames] are the spec names a hoisted enum must not take: the
+  /// component schemas.
+  SchemaParser(
+    this._sourceMap,
+    this._refResolver, {
+    Set<String> reservedNames = const {},
+  }) : _takenClassNames = {...reservedNames.map(toPascalCase)} {
     // Wire the mutual dependency
     _refResolver.bindParser(this);
   }
+
+  /// Enums hoisted out of inline property schemas so far, by spec name.
+  Map<String, EnumSchema> get hoistedEnums => Map.unmodifiable(_hoisted);
 
   /// Parses [raw] at [jsonPointer] into a [SchemaObject].
   ///
   /// [name] is optional component name when resolved from `$ref`;
   /// pass `null` for inline schemas.
+  ///
+  /// [owner] names the schema an inline object belongs to when it has no
+  /// [name] of its own (the inline body of an operation), and is the prefix of
+  /// the inline enums hoisted out of its properties.
   SchemaObject parse(
     Map<String, dynamic> raw,
     String jsonPointer, {
     String? name,
+    String? owner,
   }) {
-    return parseWithName(raw, jsonPointer, name);
+    return parseWithName(raw, jsonPointer, name, owner: owner);
   }
 
   /// Internal entry point used by [RefResolver] to pass the resolved component name.
   SchemaObject parseWithName(
     Map<String, dynamic> raw,
     String jsonPointer,
-    String? name,
-  ) {
+    String? name, {
+    String? owner,
+  }) {
     // 1. $ref takes priority over all sibling keys (OpenAPI 3.0 rule; Pitfall 3)
     final ref = raw[r'$ref'];
     if (ref is String) {
@@ -67,7 +102,7 @@ final class SchemaParser {
 
     // 3. allOf → AllOfSchema
     if (raw.containsKey('allOf')) {
-      return _parseAllOf(raw, jsonPointer, name);
+      return _parseAllOf(raw, jsonPointer, name, owner);
     }
 
     // 4. oneOf → OneOfSchema
@@ -125,7 +160,7 @@ final class SchemaParser {
             !raw.containsKey('enum') &&
             !raw.containsKey('oneOf') &&
             !raw.containsKey('allOf'))) {
-      return _parseObject(raw, jsonPointer, name, isNullable);
+      return _parseObject(raw, jsonPointer, name, isNullable, owner);
     }
 
     // 9. Primitive types
@@ -157,6 +192,7 @@ final class SchemaParser {
     Map<String, dynamic> raw,
     String pointer,
     String? name,
+    String? owner,
   ) {
     final allOfList = raw['allOf'] as List?;
     if (allOfList == null || allOfList.isEmpty) {
@@ -173,6 +209,7 @@ final class SchemaParser {
           Map<String, dynamic>.from(allOfList[i] as Map),
           '$pointer/allOf/$i',
           null,
+          owner: name ?? owner,
         ),
       );
     }
@@ -427,6 +464,7 @@ final class SchemaParser {
     String pointer,
     String? name,
     bool isNullable,
+    String? owner,
   ) {
     // Validate name is not digit-leading (PARSE-10)
     if (name != null && RegExp(r'^\d').hasMatch(name)) {
@@ -447,11 +485,15 @@ final class SchemaParser {
       rawProperties.forEach((key, value) {
         final propName = key.toString();
         final propPointer = '$pointer/properties/$propName';
-        final propSchema = parseWithName(
+        var propSchema = parseWithName(
           Map<String, dynamic>.from(value as Map),
           propPointer,
           null,
         );
+        final ownerName = name ?? owner;
+        if (ownerName != null) {
+          propSchema = _hoistInlineEnums(propSchema, ownerName, propName);
+        }
         properties.add(
           SchemaProperty(
             specName: propName,
@@ -483,6 +525,59 @@ final class SchemaParser {
       additionalProperties: additionalProperties,
       isNullable: isNullable,
     );
+  }
+
+  /// Replaces the inline enum [schema] of property [propName] of [ownerName]
+  /// with a named one, `<Owner><Property>`, and registers it in [hoistedEnums].
+  ///
+  /// Looks through arrays (`type: array, items: {enum: [...]}`). Named schemas
+  /// are returned untouched: they are shared component instances, not inline
+  /// declarations.
+  SchemaObject _hoistInlineEnums(
+    SchemaObject schema,
+    String ownerName,
+    String propName,
+  ) {
+    if (schema.name != null) return schema;
+    switch (schema) {
+      case EnumSchema():
+        final key = '$ownerName.$propName';
+        return _hoistedByKey[key] ??= _registerHoisted(
+          schema,
+          '${toPascalCase(ownerName)}${toPascalCase(propName)}',
+        );
+      case ArraySchema(:final items):
+        final hoisted = _hoistInlineEnums(items, ownerName, propName);
+        if (identical(hoisted, items)) return schema;
+        return ArraySchema(
+          description: schema.description,
+          isNullable: schema.isNullable,
+          items: hoisted,
+        );
+      default:
+        return schema;
+    }
+  }
+
+  /// Names [schema] after [base], suffixed with a counter while the name is
+  /// taken, and records it in [_hoisted].
+  EnumSchema _registerHoisted(EnumSchema schema, String base) {
+    var candidate = base;
+    var counter = 2;
+    while (_takenClassNames.contains(toPascalCase(candidate))) {
+      candidate = '$base$counter';
+      counter++;
+    }
+    _takenClassNames.add(toPascalCase(candidate));
+    final named = EnumSchema(
+      name: candidate,
+      description: schema.description,
+      isNullable: schema.isNullable,
+      enumType: schema.enumType,
+      values: schema.values,
+    );
+    _hoisted[candidate] = named;
+    return named;
   }
 
   /// Normalizes a 3.1/3.2 type array like `['string', 'null']` to

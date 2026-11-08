@@ -1447,6 +1447,10 @@ final class ServiceGenerator {
       EnumSchema() when schema.name != null => _registry.dartClassName(
         schema.name!,
       ),
+      // An inline enum parameter has no class: it is its wire value.
+      EnumSchema(enumType: 'integer') => 'int',
+      EnumSchema(enumType: 'number') => 'double',
+      EnumSchema() => 'String',
       AllOfSchema() when schema.name != null => _registry.dartClassName(
         schema.name!,
       ),

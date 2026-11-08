@@ -44,7 +44,17 @@ final class OpenApiParser {
 
     // --- (2) Build parser stack ---
     final refResolver = RefResolver(rawMap, sourceMap);
-    final schemaParser = SchemaParser(sourceMap, refResolver);
+    final componentNames = {
+      for (final key
+          in ((rawMap['components'] as Map?)?['schemas'] as Map? ?? const {})
+              .keys)
+        key.toString(),
+    };
+    final schemaParser = SchemaParser(
+      sourceMap,
+      refResolver,
+      reservedNames: componentNames,
+    );
     final operationParser = OperationParser(
       sourceMap,
       schemaParser,
@@ -106,6 +116,13 @@ final class OpenApiParser {
           );
         }
       }
+    }
+
+    // Inline enums of properties were hoisted into named enums while parsing:
+    // register them so ModelGenerator emits a class for each. Done after the
+    // operations are parsed, since inline bodies hoist theirs too.
+    for (final entry in schemaParser.hoistedEnums.entries) {
+      resolvedSchemas.putIfAbsent(entry.key, () => entry.value);
     }
 
     // --- (5) Parse security schemes ---
