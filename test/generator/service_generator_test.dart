@@ -1193,6 +1193,76 @@ void main() {
       },
     );
 
+    test('multi-line parameter description → every line is a doc line', () {
+      final doc = _makeDoc(
+        operations: [
+          const OperationItem(
+            path: '/reports',
+            method: 'get',
+            operationId: 'listReports',
+            tags: ['report'],
+            parameters: [
+              ParameterObject(
+                name: 'from',
+                location: 'query',
+                description:
+                    'Start of the reporting window (inclusive).\n\n'
+                    'Dates are interpreted in the server time zone.',
+                required: false,
+                schema: _strSchema,
+              ),
+            ],
+            responses: {'200': _ok200},
+            security: [],
+            additionalMethods: [],
+          ),
+        ],
+      );
+      final src = _source(doc, 'services/report_api.dart');
+      expect(
+        src,
+        contains(
+          '  /// - [from] Start of the reporting window (inclusive).\n'
+          '  ///\n'
+          '  /// Dates are interpreted in the server time zone.\n',
+        ),
+      );
+    });
+
+    test(
+      'multi-line summary and CRLF description → every line is a doc line',
+      () {
+        final doc = _makeDoc(
+          operations: [
+            const OperationItem(
+              path: '/reports',
+              method: 'get',
+              operationId: 'listReports',
+              summary: 'List reports\nacross all teams',
+              description: 'First paragraph.\r\n\r\nSecond paragraph.',
+              tags: ['report'],
+              parameters: [],
+              responses: {'200': _ok200},
+              security: [],
+              additionalMethods: [],
+            ),
+          ],
+        );
+        final src = _source(doc, 'services/report_api.dart');
+        expect(
+          src,
+          contains(
+            '  /// List reports\n'
+            '  /// across all teams\n'
+            '  ///\n'
+            '  /// First paragraph.\n'
+            '  ///\n'
+            '  /// Second paragraph.\n',
+          ),
+        );
+      },
+    );
+
     test('source contains /// Throws [DioException] on non-2xx response', () {
       final doc = _makeDoc(
         operations: [
